@@ -3,12 +3,30 @@ import Stripe from "stripe"
 import { db } from "@/lib/firebase/config"
 import { doc, updateDoc, collection, query, where, getDocs, addDoc } from "firebase/firestore"
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2025-02-24.acacia",
-  typescript: true,
-})
+// Lazy initialization to avoid build-time errors
+let stripeInstance: Stripe | null = null
 
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!
+const getStripe = (): Stripe => {
+  if (!stripeInstance) {
+    const secretKey = process.env.STRIPE_SECRET_KEY
+    if (!secretKey) {
+      throw new Error("STRIPE_SECRET_KEY is not set")
+    }
+    stripeInstance = new Stripe(secretKey, {
+      apiVersion: "2025-02-24.acacia",
+      typescript: true,
+    })
+  }
+  return stripeInstance
+}
+
+const getWebhookSecret = (): string => {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET
+  if (!secret) {
+    throw new Error("STRIPE_WEBHOOK_SECRET is not set")
+  }
+  return secret
+}
 
 export async function POST(request: NextRequest) {
   const body = await request.text()
@@ -17,6 +35,8 @@ export async function POST(request: NextRequest) {
   let event: Stripe.Event
 
   try {
+    const stripe = getStripe()
+    const webhookSecret = getWebhookSecret()
     event = stripe.webhooks.constructEvent(body, signature, webhookSecret)
   } catch (err: any) {
     console.error("Webhook signature verification failed:", err.message)
