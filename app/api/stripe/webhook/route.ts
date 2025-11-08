@@ -4,7 +4,7 @@ import { db } from "@/lib/firebase/config"
 import { doc, updateDoc, collection, query, where, getDocs, addDoc } from "firebase/firestore"
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-06-20.acacia",
+  apiVersion: "2025-02-24.acacia",
   typescript: true,
 })
 
