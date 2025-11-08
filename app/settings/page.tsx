@@ -39,7 +39,17 @@ export default function SettingsPage() {
       const emailKey = user.email.toLowerCase().trim()
       const clientDoc = await getDoc(doc(db, "clients", emailKey))
       if (clientDoc.exists()) {
-        const clientData = { id: clientDoc.id, ...clientDoc.data() } as Client
+        const docData = clientDoc.data()
+        const clientData: Client = {
+          uid: docData.uid || user.uid,
+          name: docData.name || "",
+          email: docData.email || user.email || "",
+          beamCoinBalance: docData.beamCoinBalance || 0,
+          housingWalletBalance: docData.housingWalletBalance || 0,
+          stripeCustomerId: docData.stripeCustomerId,
+          planType: docData.planType,
+          createdAt: docData.createdAt?.toDate?.() || docData.createdAt,
+        }
         setClient(clientData)
         setName(clientData.name)
       }
