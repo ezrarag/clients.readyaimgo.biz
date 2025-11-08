@@ -1,6 +1,6 @@
 import { initializeApp, getApps, FirebaseApp } from "firebase/app"
-import { getAuth, Auth } from "firebase/auth"
-import { getFirestore, Firestore } from "firebase/firestore"
+import { getAuth } from "firebase/auth"
+import { getFirestore } from "firebase/firestore"
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -11,28 +11,17 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 }
 
+// Initialize Firebase app
 let app: FirebaseApp
-let auth: Auth
-let db: Firestore
-
-if (typeof window !== "undefined") {
-  if (!getApps().length) {
-    app = initializeApp(firebaseConfig)
-  } else {
-    app = getApps()[0]
-  }
-  auth = getAuth(app)
-  db = getFirestore(app)
+if (!getApps().length) {
+  app = initializeApp(firebaseConfig)
 } else {
-  // Server-side
-  if (!getApps().length) {
-    app = initializeApp(firebaseConfig)
-  } else {
-    app = getApps()[0]
-  }
-  auth = getAuth(app)
-  db = getFirestore(app)
+  app = getApps()[0]
 }
+
+// Initialize Firebase services
+const auth = getAuth(app)
+const db = getFirestore(app)
 
 export { app, auth, db }
 

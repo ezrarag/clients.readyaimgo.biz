@@ -26,6 +26,7 @@ import {
   DollarSign,
   Download,
   ArrowUpDown,
+  Coins,
 } from "lucide-react"
 import { signOut } from "@/lib/firebase/auth"
 import { format } from "date-fns"
