@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { addBeamTransaction, getBeamTransactions } from "@/lib/beamCoin"
 import { db } from "@/lib/firebase/config"
-import { doc, updateDoc, getDoc } from "firebase/firestore"
+import { doc, updateDoc, collection, query, where, getDocs } from "firebase/firestore"
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -41,16 +41,20 @@ export async function POST(request: NextRequest) {
     // Post transaction to BEAM Coin Ledger
     const result = await addBeamTransaction(clientId, type, amount, description)
 
-    // Update Firestore cache with new balance
+    // Update Firestore cache with new balance (find by uid field)
     try {
-      const clientDoc = await getDoc(doc(db, "clients", clientId))
-      if (clientDoc.exists()) {
+      const clientsRef = collection(db, "clients")
+      const q = query(clientsRef, where("uid", "==", clientId))
+      const snapshot = await getDocs(q)
+      
+      if (!snapshot.empty) {
+        const clientDoc = snapshot.docs[0]
         const currentBalance = clientDoc.data().beamCoinBalance || 0
         const newBalance = type === "earn" 
           ? currentBalance + amount 
           : Math.max(0, currentBalance - amount)
 
-        await updateDoc(doc(db, "clients", clientId), {
+        await updateDoc(doc(db, "clients", clientDoc.id), {
           beamCoinBalance: newBalance,
           beamCoinLastUpdated: new Date(),
         })

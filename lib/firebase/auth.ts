@@ -1,5 +1,4 @@
-import { auth } from "./config"
-import { cookies } from "next/headers"
+import { auth as firebaseAuth } from "./config"
 import { 
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -12,7 +11,7 @@ import {
 
 export async function signIn(email: string, password: string) {
   try {
-    const userCredential = await signInWithEmailAndPassword(auth, email, password)
+    const userCredential = await signInWithEmailAndPassword(firebaseAuth, email, password)
     return { user: userCredential.user, error: null }
   } catch (error: any) {
     return { user: null, error: error.message }
@@ -21,7 +20,7 @@ export async function signIn(email: string, password: string) {
 
 export async function signUp(email: string, password: string, name: string) {
   try {
-    const userCredential = await createUserWithEmailAndPassword(auth, email, password)
+    const userCredential = await createUserWithEmailAndPassword(firebaseAuth, email, password)
     return { user: userCredential.user, error: null }
   } catch (error: any) {
     return { user: null, error: error.message }
@@ -31,7 +30,7 @@ export async function signUp(email: string, password: string, name: string) {
 export async function signInWithGoogle() {
   try {
     const provider = new GoogleAuthProvider()
-    const userCredential = await signInWithPopup(auth, provider)
+    const userCredential = await signInWithPopup(firebaseAuth, provider)
     return { user: userCredential.user, error: null }
   } catch (error: any) {
     return { user: null, error: error.message }
@@ -40,24 +39,10 @@ export async function signInWithGoogle() {
 
 export async function signOut() {
   try {
-    await firebaseSignOut(auth)
+    await firebaseSignOut(firebaseAuth)
     return { error: null }
   } catch (error: any) {
     return { error: error.message }
   }
-}
-
-// Server-side auth helper
-export async function auth() {
-  const cookieStore = await cookies()
-  const token = cookieStore.get("auth-token")
-  
-  if (!token) {
-    return null
-  }
-
-  // For now, we'll use client-side auth
-  // In production, you'd verify the token server-side
-  return null
 }
 

@@ -33,10 +33,11 @@ export default function SettingsPage() {
   }, [user])
 
   const loadClientData = async () => {
-    if (!user) return
+    if (!user || !user.email) return
 
     try {
-      const clientDoc = await getDoc(doc(db, "clients", user.uid))
+      const emailKey = user.email.toLowerCase().trim()
+      const clientDoc = await getDoc(doc(db, "clients", emailKey))
       if (clientDoc.exists()) {
         const clientData = { id: clientDoc.id, ...clientDoc.data() } as Client
         setClient(clientData)
@@ -50,11 +51,12 @@ export default function SettingsPage() {
   }
 
   const handleSave = async () => {
-    if (!user || !client) return
+    if (!user || !client || !user.email) return
 
     setSaving(true)
     try {
-      await updateDoc(doc(db, "clients", user.uid), {
+      const emailKey = user.email.toLowerCase().trim()
+      await updateDoc(doc(db, "clients", emailKey), {
         name: name,
       })
       setClient({ ...client, name })

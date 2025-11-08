@@ -10,7 +10,7 @@ import { doc, getDoc, collection, query, where, orderBy, getDocs } from "firebas
 import { db } from "@/lib/firebase/config"
 import { Client, Transaction, Subscription, HousingWallet } from "@/types"
 import { format } from "date-fns"
-import { Loader2, LogOut, Wallet, Coins, CreditCard, Calendar, RefreshCw, AlertCircle } from "lucide-react"
+import { Loader2, LogOut, Wallet, Coins, CreditCard, Calendar, RefreshCw, AlertCircle, ArrowUp } from "lucide-react"
 
 export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth()
@@ -38,11 +38,12 @@ export default function DashboardPage() {
   }, [user])
 
   const loadDashboardData = async () => {
-    if (!user) return
+    if (!user || !user.email) return
 
     try {
-      // Load client data
-      const clientDoc = await getDoc(doc(db, "clients", user.uid))
+      // Load client data using email as document ID
+      const emailKey = user.email.toLowerCase().trim()
+      const clientDoc = await getDoc(doc(db, "clients", emailKey))
       if (clientDoc.exists()) {
         const clientData = { id: clientDoc.id, ...clientDoc.data() } as Client
         setClient(clientData)
@@ -187,12 +188,56 @@ export default function DashboardPage() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Upgrade Card for Free Tier */}
+        {client.planType === "free" && !subscription && (
+          <Card className="mb-8 border-2 border-primary bg-primary/5">
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-xl mb-1">Unlock Premium Features</CardTitle>
+                  <CardDescription>
+                    Upgrade from Free Tier to access all Readyaimgo features and benefits
+                  </CardDescription>
+                </div>
+                <Button
+                  onClick={async () => {
+                    try {
+                      const res = await fetch("/api/stripe/checkout", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          clientId: user?.uid,
+                          email: user?.email,
+                        }),
+                      })
+                      const { url } = await res.json()
+                      if (url) {
+                        window.location.href = url
+                      }
+                    } catch (error) {
+                      console.error("Error creating checkout session:", error)
+                      alert("Error starting checkout. Please try again.")
+                    }
+                  }}
+                >
+                  <ArrowUp className="h-4 w-4 mr-2" />
+                  Upgrade Now
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Welcome Card */}
         <Card className="mb-8 bg-gradient-readyaimgo text-white border-0">
           <CardHeader>
             <CardTitle className="text-3xl">Welcome back, {client.name}!</CardTitle>
             <CardDescription className="text-white/80">
-              {subscription ? `Current Plan: ${subscription.planName}` : "Get started with a subscription"}
+              {subscription 
+                ? `Current Plan: ${subscription.planName}` 
+                : client.planType === "free" 
+                  ? "Free Tier - Upgrade to unlock premium features"
+                  : "Get started with a subscription"}
             </CardDescription>
           </CardHeader>
         </Card>
@@ -222,10 +267,63 @@ export default function DashboardPage() {
                     Manage Subscription
                   </Button>
                 </div>
+              ) : client.planType === "free" ? (
+                <div className="space-y-4">
+                  <div>
+                    <p className="text-2xl font-bold">Free Tier</p>
+                    <p className="text-sm text-muted-foreground">Limited features</p>
+                  </div>
+                  <Button 
+                    className="w-full" 
+                    onClick={async () => {
+                      try {
+                        const res = await fetch("/api/stripe/checkout", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            clientId: user?.uid,
+                            email: user?.email,
+                          }),
+                        })
+                        const { url } = await res.json()
+                        if (url) {
+                          window.location.href = url
+                        }
+                      } catch (error) {
+                        console.error("Error creating checkout session:", error)
+                        alert("Error starting checkout. Please try again.")
+                      }
+                    }}
+                  >
+                    Upgrade Now
+                  </Button>
+                </div>
               ) : (
                 <div className="space-y-4">
                   <p className="text-muted-foreground">No active subscription</p>
-                  <Button className="w-full" variant="outline">
+                  <Button 
+                    className="w-full" 
+                    variant="outline"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch("/api/stripe/checkout", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            clientId: user?.uid,
+                            email: user?.email,
+                          }),
+                        })
+                        const { url } = await res.json()
+                        if (url) {
+                          window.location.href = url
+                        }
+                      } catch (error) {
+                        console.error("Error creating checkout session:", error)
+                        alert("Error starting checkout. Please try again.")
+                      }
+                    }}
+                  >
                     View Plans
                   </Button>
                 </div>

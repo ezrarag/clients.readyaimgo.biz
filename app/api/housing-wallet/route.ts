@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/firebase/config"
-import { doc, getDoc } from "firebase/firestore"
+import { collection, query, where, getDocs } from "firebase/firestore"
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -11,14 +11,16 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Get client data
-    const clientDoc = await getDoc(doc(db, "clients", clientId))
+    // Find client document by uid field (documents are keyed by email)
+    const clientsRef = collection(db, "clients")
+    const q = query(clientsRef, where("uid", "==", clientId))
+    const snapshot = await getDocs(q)
     
-    if (!clientDoc.exists()) {
+    if (snapshot.empty) {
       return NextResponse.json({ error: "Client not found" }, { status: 404 })
     }
 
-    const clientData = clientDoc.data()
+    const clientData = snapshot.docs[0].data()
     
     // Mock housing wallet data - in production, fetch from BEAM Coin API
     const housingWallet = {

@@ -59,9 +59,30 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
   
   if (!snapshot.empty) {
     const clientDoc = snapshot.docs[0]
+    const clientData = clientDoc.data()
+    const newPlanType = subscription.items.data[0]?.price?.nickname || "Standard"
+    
     await updateDoc(doc(db, "clients", clientDoc.id), {
-      planType: subscription.items.data[0]?.price?.nickname || "Standard",
+      planType: newPlanType,
     })
+    
+    // Notify Slack about upgrade if plan changed
+    if (clientData.planType === "free" && newPlanType !== "free") {
+      try {
+        await fetch(`${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/slack/notify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "upgrade",
+            email: clientData.email,
+            name: clientData.name,
+            planType: newPlanType,
+          }),
+        })
+      } catch (error) {
+        console.error("Error sending Slack notification:", error)
+      }
+    }
   }
 }
 
@@ -91,6 +112,7 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
   
   if (!snapshot.empty) {
     const clientDoc = snapshot.docs[0]
+    const clientData = clientDoc.data()
     const clientId = clientDoc.id
     
     // Create transaction record
@@ -101,6 +123,22 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
       timestamp: new Date(),
       description: `Subscription payment - ${invoice.number || ""}`,
     })
+    
+    // Notify Slack about payment
+    try {
+      await fetch(`${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/slack/notify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "payment",
+          email: clientData.email,
+          amount: amount,
+          description: `Subscription payment - ${invoice.number || ""}`,
+        }),
+      })
+    } catch (error) {
+      console.error("Error sending Slack notification:", error)
+    }
   }
 }
 

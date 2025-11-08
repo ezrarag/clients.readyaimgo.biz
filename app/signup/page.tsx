@@ -36,16 +36,36 @@ export default function SignUpPage() {
     if (result.error) {
       setError(result.error)
       setLoading(false)
-    } else if (result.user) {
-      // Create client document in Firestore
-      await setDoc(doc(db, "clients", result.user.uid), {
+    } else if (result.user && result.user.email) {
+      // Create client document in Firestore using email as document ID
+      const emailKey = result.user.email.toLowerCase().trim()
+      await setDoc(doc(db, "clients", emailKey), {
         uid: result.user.uid,
         name: name,
         email: result.user.email,
+        planType: "free",
         beamCoinBalance: 0,
         housingWalletBalance: 0,
         createdAt: new Date(),
       })
+      
+      // Notify Slack about new signup
+      try {
+        await fetch("/api/slack/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "signup",
+            email: result.user.email,
+            name: name,
+            planType: "free",
+          }),
+        })
+      } catch (error) {
+        console.error("Error sending Slack notification:", error)
+        // Don't block signup if Slack fails
+      }
+      
       router.push("/dashboard")
     }
   }
@@ -58,16 +78,36 @@ export default function SignUpPage() {
     if (result.error) {
       setError(result.error)
       setLoading(false)
-    } else if (result.user) {
-      // Create client document in Firestore
-      await setDoc(doc(db, "clients", result.user.uid), {
+    } else if (result.user && result.user.email) {
+      // Create client document in Firestore using email as document ID
+      const emailKey = result.user.email.toLowerCase().trim()
+      await setDoc(doc(db, "clients", emailKey), {
         uid: result.user.uid,
         name: result.user.displayName || "User",
         email: result.user.email,
+        planType: "free",
         beamCoinBalance: 0,
         housingWalletBalance: 0,
         createdAt: new Date(),
       })
+      
+      // Notify Slack about new signup
+      try {
+        await fetch("/api/slack/notify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "signup",
+            email: result.user.email,
+            name: result.user.displayName || "User",
+            planType: "free",
+          }),
+        })
+      } catch (error) {
+        console.error("Error sending Slack notification:", error)
+        // Don't block signup if Slack fails
+      }
+      
       router.push("/dashboard")
     }
   }

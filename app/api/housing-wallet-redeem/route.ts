@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/firebase/config"
-import { doc, getDoc, updateDoc, addDoc, collection } from "firebase/firestore"
+import { doc, updateDoc, addDoc, collection, query, where, getDocs } from "firebase/firestore"
 import { addBeamTransaction } from "@/lib/beamCoin"
 
 export async function POST(request: NextRequest) {
@@ -14,12 +14,16 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Get client data
-    const clientDoc = await getDoc(doc(db, "clients", clientId))
-    if (!clientDoc.exists()) {
+    // Find client document by uid field (documents are keyed by email)
+    const clientsRef = collection(db, "clients")
+    const q = query(clientsRef, where("uid", "==", clientId))
+    const snapshot = await getDocs(q)
+    
+    if (snapshot.empty) {
       return NextResponse.json({ error: "Client not found" }, { status: 404 })
     }
 
+    const clientDoc = snapshot.docs[0]
     const clientData = clientDoc.data()
     const currentCredits = clientData.housingWalletBalance || 0
 
@@ -30,9 +34,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Update housing wallet balance
+    // Update housing wallet balance (use email as document ID)
     const newBalance = currentCredits - credits
-    await updateDoc(doc(db, "clients", clientId), {
+    await updateDoc(doc(db, "clients", clientDoc.id), {
       housingWalletBalance: newBalance,
     })
 
