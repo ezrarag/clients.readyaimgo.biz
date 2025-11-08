@@ -12,12 +12,9 @@ const firebaseConfig = {
 }
 
 // Initialize Firebase app
-let app: FirebaseApp
-if (!getApps().length) {
-  app = initializeApp(firebaseConfig)
-} else {
-  app = getApps()[0]
-}
+const app: FirebaseApp = !getApps().length
+  ? initializeApp(firebaseConfig)
+  : getApps()[0]
 
 // Initialize Firebase services
 const auth = getAuth(app)
