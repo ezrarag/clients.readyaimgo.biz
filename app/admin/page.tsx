@@ -57,6 +57,7 @@ export default function AdminPage() {
   })
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
+  const [planTypeFilter, setPlanTypeFilter] = useState<string>("all")
   const [transactionTypeFilter, setTransactionTypeFilter] = useState<"all" | "earn" | "spend">("all")
   const [sortField, setSortField] = useState<string>("")
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc")
@@ -91,25 +92,37 @@ export default function AdminPage() {
       let adminClients = await getAdminClients(idToken)
       if (adminClients.length === 0) {
         // Fallback to Firestore
-        const snapshot = await getDocs(collection(db, "clients"))
-        adminClients = snapshot.docs.map((doc) => ({
-          uid: doc.id,
-          name: doc.data().name || "",
-          email: doc.data().email || "",
-          planType: doc.data().planType || "",
-          beamCoinBalance: doc.data().beamCoinBalance || 0,
-          housingWalletBalance: doc.data().housingWalletBalance || 0,
-          stripeCustomerId: doc.data().stripeCustomerId || "",
-          createdAt: doc.data().createdAt?.toDate?.()?.toISOString() || "",
-        })) as AdminClient[]
+        try {
+          const firestoreDb = db() // db is a function that returns the Firestore instance
+          const snapshot = await getDocs(collection(firestoreDb, "clients"))
+          adminClients = snapshot.docs.map((doc) => {
+            const data = doc.data()
+            // Handle both email-based document IDs and uid-based document IDs
+            const uid = data.uid || doc.id
+            return {
+              uid: uid,
+              name: data.name || "",
+              email: data.email || "",
+              planType: data.planType || "",
+              beamCoinBalance: data.beamCoinBalance || 0,
+              housingWalletBalance: data.housingWalletBalance || 0,
+              stripeCustomerId: data.stripeCustomerId || "",
+              createdAt: data.createdAt?.toDate?.()?.toISOString() || data.createdAt || "",
+            }
+          }) as AdminClient[]
 
-        // Update stats from Firestore data if not available from API
-        if (adminStats.totalClients === 0) {
-          setStats({
-            ...adminStats,
-            totalClients: adminClients.length,
-            totalBeamCoins: adminClients.reduce((sum, c) => sum + (c.beamCoinBalance || 0), 0),
-          })
+          // Update stats from Firestore data if not available from API
+          if (adminStats.totalClients === 0) {
+            setStats({
+              ...adminStats,
+              totalClients: adminClients.length,
+              totalBeamCoins: adminClients.reduce((sum, c) => sum + (c.beamCoinBalance || 0), 0),
+            })
+          }
+        } catch (firestoreError: any) {
+          console.error("Error loading clients from Firestore:", firestoreError)
+          // Continue with empty array if Firestore fails
+          adminClients = []
         }
       }
       setClients(adminClients)
@@ -117,8 +130,11 @@ export default function AdminPage() {
       // Load transactions from BEAM Ledger admin endpoint
       const adminTransactions = await getAdminTransactions(100, idToken)
       setTransactions(adminTransactions)
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error loading admin data:", error)
+      // Set empty arrays to prevent infinite loading
+      setClients([])
+      setTransactions([])
     } finally {
       setLoading(false)
     }
@@ -127,12 +143,30 @@ export default function AdminPage() {
   // Filter and sort clients
   const filteredAndSortedClients = useMemo(() => {
     let filtered = clients.filter((client) => {
+      // Plan type filter
+      if (planTypeFilter !== "all") {
+        const clientPlanType = (client.planType || "").toLowerCase()
+        const filterPlanType = planTypeFilter.toLowerCase()
+        if (filterPlanType === "c suite" || filterPlanType === "c-suite") {
+          // Match "c suite", "c-suite", "csuite", etc.
+          if (!clientPlanType.includes("suite") && !clientPlanType.includes("c-suite") && !clientPlanType.includes("csuite")) {
+            return false
+          }
+        } else if (clientPlanType !== filterPlanType) {
+          return false
+        }
+      }
+      
+      // Search query filter
       const query = searchQuery.toLowerCase()
-      return (
-        client.name?.toLowerCase().includes(query) ||
-        client.email?.toLowerCase().includes(query) ||
-        client.uid.toLowerCase().includes(query)
-      )
+      if (query) {
+        return (
+          client.name?.toLowerCase().includes(query) ||
+          client.email?.toLowerCase().includes(query) ||
+          client.uid.toLowerCase().includes(query)
+        )
+      }
+      return true
     })
 
     if (sortField) {
@@ -152,7 +186,7 @@ export default function AdminPage() {
     }
 
     return filtered
-  }, [clients, searchQuery, sortField, sortDirection])
+  }, [clients, searchQuery, planTypeFilter, sortField, sortDirection])
 
   // Filter transactions
   const filteredTransactions = useMemo(() => {
@@ -329,6 +363,21 @@ export default function AdminPage() {
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
+                    <Select
+                      value={planTypeFilter}
+                      onValueChange={setPlanTypeFilter}
+                    >
+                      <SelectTrigger className="w-40">
+                        <SelectValue placeholder="Filter by plan" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Plans</SelectItem>
+                        <SelectItem value="c suite">C Suite</SelectItem>
+                        <SelectItem value="free">Free</SelectItem>
+                        <SelectItem value="standard">Standard</SelectItem>
+                        <SelectItem value="premium">Premium</SelectItem>
+                      </SelectContent>
+                    </Select>
                     <div className="relative">
                       <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                       <Input

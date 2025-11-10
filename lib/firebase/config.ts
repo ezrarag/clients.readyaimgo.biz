@@ -11,45 +11,99 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 }
 
-// Initialize Firebase app with error handling for build time
-let app: FirebaseApp
-let auth: Auth
-let db: Firestore
+// Check if config is valid (not dummy values)
+const isConfigValid = () => {
+  return !!(
+    firebaseConfig.apiKey &&
+    firebaseConfig.apiKey !== "dummy" &&
+    firebaseConfig.projectId &&
+    firebaseConfig.projectId !== "dummy" &&
+    firebaseConfig.authDomain &&
+    firebaseConfig.authDomain !== "dummy"
+  )
+}
 
-try {
-  // Only initialize if we have the minimum required config
-  if (firebaseConfig.apiKey && firebaseConfig.projectId) {
+// Initialize Firebase app with error handling for build time
+let app: FirebaseApp | null = null
+let auth: Auth | null = null
+let db: Firestore | null = null
+
+const initializeFirebase = () => {
+  if (app) return // Already initialized
+  
+  if (!isConfigValid()) {
+    throw new Error(
+      "Firebase configuration is missing or invalid. " +
+      "Please set NEXT_PUBLIC_FIREBASE_API_KEY, NEXT_PUBLIC_FIREBASE_PROJECT_ID, and other Firebase environment variables."
+    )
+  }
+
+  try {
     app = !getApps().length
       ? initializeApp(firebaseConfig)
       : getApps()[0]
     
     auth = getAuth(app)
     db = getFirestore(app)
-  } else {
-    // During build, if config is missing, create dummy instances
-    // These will be properly initialized at runtime when env vars are available
-    throw new Error("Firebase config missing")
+  } catch (error) {
+    console.error("Firebase initialization error:", error)
+    throw error
   }
-} catch (error) {
-  // During build time, if Firebase fails to initialize, create placeholder exports
-  // This allows the build to complete. Runtime will fail with proper error messages.
-  console.warn("Firebase initialization skipped during build:", error instanceof Error ? error.message : "Unknown error")
-  
-  // Create a minimal app instance to satisfy type requirements
-  // This will fail at runtime if actually used without proper config
-  const dummyConfig = {
-    apiKey: "dummy",
-    authDomain: "dummy",
-    projectId: "dummy",
-    storageBucket: "dummy",
-    messagingSenderId: "dummy",
-    appId: "dummy",
-  }
-  
-  app = initializeApp(dummyConfig, "dummy")
-  auth = getAuth(app)
-  db = getFirestore(app)
 }
 
-export { app, auth, db }
+// Initialize Firebase - only if config is valid
+if (isConfigValid()) {
+  try {
+    initializeFirebase()
+  } catch (error) {
+    // During build, this might fail - that's okay
+    // At runtime, if config is valid, it should work
+    if (typeof window !== "undefined") {
+      console.error("Failed to initialize Firebase:", error)
+    }
+  }
+} else {
+  // If config is invalid, log a warning but don't initialize
+  // This allows build to complete, but runtime will fail with clear errors
+  if (typeof window !== "undefined") {
+    console.error(
+      "Firebase configuration is missing or invalid. " +
+      "Please check your environment variables: NEXT_PUBLIC_FIREBASE_API_KEY, NEXT_PUBLIC_FIREBASE_PROJECT_ID, etc."
+    )
+  }
+}
+
+// Export getters that ensure initialization
+export const getApp = (): FirebaseApp => {
+  if (!app && isConfigValid()) {
+    initializeFirebase()
+  }
+  if (!app) {
+    throw new Error("Firebase is not initialized. Please check your environment variables.")
+  }
+  return app
+}
+
+export const getAuthInstance = (): Auth => {
+  if (!auth && isConfigValid()) {
+    initializeFirebase()
+  }
+  if (!auth) {
+    throw new Error("Firebase Auth is not initialized. Please check your environment variables.")
+  }
+  return auth
+}
+
+export const getDb = (): Firestore => {
+  if (!db && isConfigValid()) {
+    initializeFirebase()
+  }
+  if (!db) {
+    throw new Error("Firestore is not initialized. Please check your environment variables and ensure the Firestore database exists.")
+  }
+  return db
+}
+
+// Export for backward compatibility
+export { getApp as app, getAuthInstance as auth, getDb as db }
 

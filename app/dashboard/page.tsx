@@ -24,12 +24,16 @@ export default function DashboardPage() {
   const [beamCoinLoading, setBeamCoinLoading] = useState(false)
   const [beamCoinError, setBeamCoinError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const adminUid = process.env.NEXT_PUBLIC_ADMIN_UID || ""
 
   useEffect(() => {
     if (!authLoading && !user) {
       router.push("/login")
+    } else if (user && user.uid === adminUid) {
+      // Redirect admin users to admin dashboard
+      router.push("/admin")
     }
-  }, [user, authLoading, router])
+  }, [user, authLoading, router, adminUid])
 
   useEffect(() => {
     if (user) {
@@ -41,9 +45,12 @@ export default function DashboardPage() {
     if (!user || !user.email) return
 
     try {
+      // Get Firestore instance (db is a function that returns the Firestore instance)
+      const firestoreDb = db()
+
       // Load client data using email as document ID
       const emailKey = user.email.toLowerCase().trim()
-      const clientDoc = await getDoc(doc(db, "clients", emailKey))
+      const clientDoc = await getDoc(doc(firestoreDb, "clients", emailKey))
       if (clientDoc.exists()) {
         const docData = clientDoc.data()
         const clientData: Client = {
@@ -76,7 +83,7 @@ export default function DashboardPage() {
 
         // Load transactions
         const transactionsQuery = query(
-          collection(db, "transactions"),
+          collection(firestoreDb, "transactions"),
           where("clientId", "==", user.uid),
           orderBy("timestamp", "desc")
         )
@@ -90,9 +97,21 @@ export default function DashboardPage() {
 
         // Load BEAM Coin balance
         await loadBeamCoinBalance(user.uid)
+      } else {
+        // Client document doesn't exist - show error
+        setBeamCoinError("Client account not found. Please contact support.")
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error loading dashboard data:", error)
+      
+      // Show user-friendly error message
+      if (error?.code === "unavailable" || error?.message?.includes("offline")) {
+        setBeamCoinError("Unable to connect to database. Please check your internet connection and try again.")
+      } else if (error?.code === "permission-denied") {
+        setBeamCoinError("Permission denied. Please contact support.")
+      } else {
+        setBeamCoinError(error?.message || "Failed to load dashboard data")
+      }
     } finally {
       setLoading(false)
     }
@@ -172,8 +191,32 @@ export default function DashboardPage() {
     )
   }
 
-  if (!user || !client) {
+  if (!user) {
     return null
+  }
+
+  if (!client) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Card className="max-w-md">
+          <CardHeader>
+            <CardTitle>Account Not Found</CardTitle>
+            <CardDescription>
+              Your account could not be found in our system.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {beamCoinError && (
+              <p className="text-sm text-destructive mb-4">{beamCoinError}</p>
+            )}
+            <Button onClick={handleSignOut} className="w-full">
+              <LogOut className="h-4 w-4 mr-2" />
+              Sign Out
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (
