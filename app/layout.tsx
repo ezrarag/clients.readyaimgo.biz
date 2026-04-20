@@ -1,13 +1,25 @@
 import type { Metadata } from "next"
-import { Inter } from "next/font/google"
+import { Fraunces, Manrope } from "next/font/google"
 import "./globals.css"
 import { AuthProvider } from "@/components/auth/AuthProvider"
 
-const inter = Inter({ subsets: ["latin"] })
+const manrope = Manrope({
+  subsets: ["latin"],
+  variable: "--font-sans",
+})
+
+const fraunces = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-display",
+})
 
 export const metadata: Metadata = {
-  title: "Readyaimgo Client Hub",
-  description: "Manage your subscription, BEAM Coin balance, and Housing Wallet",
+  title: {
+    default: "Readyaimgo Client Hub",
+    template: "%s | Readyaimgo Client Hub",
+  },
+  description:
+    "A polished client workspace for subscriptions, BEAM Coin activity, housing wallet credits, and project feedback.",
 }
 
 export default function RootLayout({
@@ -17,10 +29,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={inter.className}>
+      <body className={`${manrope.variable} ${fraunces.variable} antialiased`}>
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   )
 }
-

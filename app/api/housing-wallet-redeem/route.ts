@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
-import { db } from "@/lib/firebase/config"
+import { getDb } from "@/lib/firebase/config"
 import { doc, updateDoc, addDoc, collection, query, where, getDocs } from "firebase/firestore"
 import { addBeamTransaction } from "@/lib/beamCoin"
 
 export async function POST(request: NextRequest) {
   try {
     const { clientId, credits, description } = await request.json()
+    const firestoreDb = getDb()
 
     if (!clientId || credits === undefined || credits <= 0) {
       return NextResponse.json(
@@ -15,7 +16,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Find client document by uid field (documents are keyed by email)
-    const clientsRef = collection(db, "clients")
+    const clientsRef = collection(firestoreDb, "clients")
     const q = query(clientsRef, where("uid", "==", clientId))
     const snapshot = await getDocs(q)
     
@@ -36,12 +37,12 @@ export async function POST(request: NextRequest) {
 
     // Update housing wallet balance (use email as document ID)
     const newBalance = currentCredits - credits
-    await updateDoc(doc(db, "clients", clientDoc.id), {
+    await updateDoc(doc(firestoreDb, "clients", clientDoc.id), {
       housingWalletBalance: newBalance,
     })
 
     // Create transaction record
-    await addDoc(collection(db, "transactions"), {
+    await addDoc(collection(firestoreDb, "transactions"), {
       clientId,
       type: "redemption",
       amount: credits * 1.5, // $1.50 per credit
@@ -76,4 +77,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-

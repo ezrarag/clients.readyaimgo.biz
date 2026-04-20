@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { addBeamTransaction, getBeamTransactions } from "@/lib/beamCoin"
-import { db } from "@/lib/firebase/config"
+import { getDb } from "@/lib/firebase/config"
 import { doc, updateDoc, collection, query, where, getDocs } from "firebase/firestore"
 
 export async function GET(request: NextRequest) {
@@ -43,7 +43,8 @@ export async function POST(request: NextRequest) {
 
     // Update Firestore cache with new balance (find by uid field)
     try {
-      const clientsRef = collection(db, "clients")
+      const firestoreDb = getDb()
+      const clientsRef = collection(firestoreDb, "clients")
       const q = query(clientsRef, where("uid", "==", clientId))
       const snapshot = await getDocs(q)
       
@@ -54,7 +55,7 @@ export async function POST(request: NextRequest) {
           ? currentBalance + amount 
           : Math.max(0, currentBalance - amount)
 
-        await updateDoc(doc(db, "clients", clientDoc.id), {
+        await updateDoc(doc(firestoreDb, "clients", clientDoc.id), {
           beamCoinBalance: newBalance,
           beamCoinLastUpdated: new Date(),
         })

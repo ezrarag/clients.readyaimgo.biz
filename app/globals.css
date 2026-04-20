@@ -4,39 +4,106 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 38 45% 98%;
+    --foreground: 220 28% 16%;
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 220 28% 16%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 258 90% 66%;
+    --popover-foreground: 220 28% 16%;
+    --primary: 19 90% 56%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --secondary: 194 46% 93%;
+    --secondary-foreground: 220 28% 16%;
+    --muted: 36 28% 94%;
+    --muted-foreground: 220 12% 41%;
+    --accent: 184 34% 90%;
+    --accent-foreground: 220 28% 16%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 258 90% 66%;
-    --radius: 0.5rem;
+    --border: 35 18% 86%;
+    --input: 35 18% 86%;
+    --ring: 19 90% 56%;
+    --radius: 1.5rem;
   }
 }
 
 @layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
   * {
     @apply border-border;
   }
+
+  html,
   body {
-    @apply bg-background text-foreground;
+    @apply min-h-screen bg-background text-foreground;
+  }
+
+  body {
+    font-family: var(--font-sans), sans-serif;
+    background:
+      radial-gradient(circle at top left, rgba(253, 186, 116, 0.25), transparent 34%),
+      radial-gradient(circle at top right, rgba(125, 211, 252, 0.18), transparent 28%),
+      linear-gradient(180deg, #fffaf3 0%, #fffdf9 45%, #fff8ef 100%);
+  }
+
+  .font-display {
+    font-family: var(--font-display), serif;
+    letter-spacing: -0.03em;
+  }
+
+  ::selection {
+    background: rgba(245, 126, 32, 0.18);
+    color: inherit;
+  }
+
+  a {
+    @apply transition-colors;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    @apply transition-colors;
   }
 }
 
 .bg-gradient-readyaimgo {
-  background: linear-gradient(135deg, #5B21B6 0%, #9333EA 100%);
+  background: linear-gradient(135deg, #f97316 0%, #ef4444 48%, #22c1c3 100%);
 }
 
+.text-balance {
+  text-wrap: balance;
+}
+
+.surface-grid {
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+  background-size: 72px 72px;
+}
+
+.shadow-glow {
+  box-shadow:
+    0 20px 60px rgba(15, 23, 42, 0.08),
+    0 8px 24px rgba(249, 115, 22, 0.12);
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.7s ease-out both;
+}

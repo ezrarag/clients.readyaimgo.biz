@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { db } from "@/lib/firebase/config"
+import { getDb } from "@/lib/firebase/config"
 import { collection, query, where, getDocs } from "firebase/firestore"
 
 export async function GET(request: NextRequest) {
@@ -11,8 +11,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const firestoreDb = getDb()
     // Find client document by uid field (documents are keyed by email)
-    const clientsRef = collection(db, "clients")
+    const clientsRef = collection(firestoreDb, "clients")
     const q = query(clientsRef, where("uid", "==", clientId))
     const snapshot = await getDocs(q)
     
@@ -35,4 +36,3 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
-

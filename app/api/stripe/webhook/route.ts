@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import Stripe from "stripe"
-import { db } from "@/lib/firebase/config"
+import { getDb } from "@/lib/firebase/config"
 import { doc, updateDoc, collection, query, where, getDocs, addDoc } from "firebase/firestore"
 
 // Lazy initialization to avoid build-time errors
@@ -71,9 +71,10 @@ export async function POST(request: NextRequest) {
 
 async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
   const customerId = subscription.customer as string
+  const firestoreDb = getDb()
   
   // Find client by stripeCustomerId
-  const clientsRef = collection(db, "clients")
+  const clientsRef = collection(firestoreDb, "clients")
   const q = query(clientsRef, where("stripeCustomerId", "==", customerId))
   const snapshot = await getDocs(q)
   
@@ -82,7 +83,7 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
     const clientData = clientDoc.data()
     const newPlanType = subscription.items.data[0]?.price?.nickname || "Standard"
     
-    await updateDoc(doc(db, "clients", clientDoc.id), {
+    await updateDoc(doc(firestoreDb, "clients", clientDoc.id), {
       planType: newPlanType,
     })
     
@@ -108,14 +109,15 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   const customerId = subscription.customer as string
+  const firestoreDb = getDb()
   
-  const clientsRef = collection(db, "clients")
+  const clientsRef = collection(firestoreDb, "clients")
   const q = query(clientsRef, where("stripeCustomerId", "==", customerId))
   const snapshot = await getDocs(q)
   
   if (!snapshot.empty) {
     const clientDoc = snapshot.docs[0]
-    await updateDoc(doc(db, "clients", clientDoc.id), {
+    await updateDoc(doc(firestoreDb, "clients", clientDoc.id), {
       planType: null,
     })
   }
@@ -124,9 +126,10 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
   const customerId = invoice.customer as string
   const amount = invoice.amount_paid / 100
+  const firestoreDb = getDb()
   
   // Find client
-  const clientsRef = collection(db, "clients")
+  const clientsRef = collection(firestoreDb, "clients")
   const q = query(clientsRef, where("stripeCustomerId", "==", customerId))
   const snapshot = await getDocs(q)
   
@@ -136,7 +139,7 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
     const clientId = clientDoc.id
     
     // Create transaction record
-    await addDoc(collection(db, "transactions"), {
+    await addDoc(collection(firestoreDb, "transactions"), {
       clientId,
       type: "payment",
       amount,
@@ -161,4 +164,3 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
     }
   }
 }
-

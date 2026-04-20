@@ -1,12 +1,29 @@
 "use client"
 
-import { useEffect, useState, useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
+import { format } from "date-fns"
+import {
+  ArrowUpDown,
+  Coins,
+  DollarSign,
+  Download,
+  Loader2,
+  LogOut,
+  RefreshCw,
+  Search,
+  TrendingUp,
+  Users,
+} from "lucide-react"
+import { collection, getDocs } from "firebase/firestore"
+
 import { useAuth } from "@/components/auth/AuthProvider"
+import { AppShell } from "@/components/site/app-shell"
+import { MetricCard } from "@/components/site/metric-card"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Select,
   SelectContent,
@@ -14,38 +31,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { collection, getDocs } from "firebase/firestore"
-import { db } from "@/lib/firebase/config"
-import { Client } from "@/types"
-import {
-  Loader2,
-  LogOut,
-  Search,
-  TrendingUp,
-  Users,
-  DollarSign,
-  Download,
-  ArrowUpDown,
-  Coins,
-} from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { getDb } from "@/lib/firebase/config"
 import { signOut } from "@/lib/firebase/auth"
-import { format } from "date-fns"
 import {
-  getAdminClients,
-  getAdminTransactions,
-  getAdminStats,
-  exportTransactionsToCSV,
-  exportClientsToCSV,
   downloadCSV,
+  exportClientsToCSV,
+  exportTransactionsToCSV,
+  getAdminClients,
+  getAdminStats,
+  getAdminTransactions,
   type AdminClient,
-  type AdminTransaction,
   type AdminStats,
+  type AdminTransaction,
 } from "@/lib/admin"
 
 type TabValue = "overview" | "clients" | "transactions" | "reports"
 
 export default function AdminPage() {
-  const { user, loading: authLoading } = useAuth()
+  const { user, effectiveRoles, loading: authLoading } = useAuth()
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<TabValue>("overview")
   const [clients, setClients] = useState<AdminClient[]>([])
@@ -55,52 +59,53 @@ export default function AdminPage() {
     totalClients: 0,
     totalUsdSubscriptions: 0,
   })
-  const [loading, setLoading] = useState(true)
+  const [pageLoading, setPageLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [planTypeFilter, setPlanTypeFilter] = useState<string>("all")
   const [transactionTypeFilter, setTransactionTypeFilter] = useState<"all" | "earn" | "spend">("all")
   const [sortField, setSortField] = useState<string>("")
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc")
-  const adminUid = process.env.NEXT_PUBLIC_ADMIN_UID || ""
+  const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null)
+  const isBeamAdmin = effectiveRoles.includes("beam-admin")
 
   useEffect(() => {
     if (!authLoading && !user) {
       router.push("/login")
-    } else if (user && user.uid !== adminUid) {
+      return
+    }
+
+    if (user && !isBeamAdmin) {
       router.push("/dashboard")
     }
-  }, [user, authLoading, router, adminUid])
+  }, [authLoading, isBeamAdmin, router, user])
+
+  // Quick nav link to impersonation page
+  // Accessible from the admin tab bar below
 
   useEffect(() => {
-    if (user && user.uid === adminUid) {
+    if (user && isBeamAdmin) {
       loadAdminData()
     }
-  }, [user, adminUid])
+  }, [isBeamAdmin, user])
 
   const loadAdminData = async () => {
     try {
-      setLoading(true)
-
-      // Get Firebase ID token for admin API calls
+      setPageLoading(true)
       const idToken = user ? await user.getIdToken() : undefined
-
-      // Load stats (overview)
       const adminStats = await getAdminStats(idToken)
       setStats(adminStats)
 
-      // Load clients from BEAM Ledger admin endpoint, fallback to Firestore
       let adminClients = await getAdminClients(idToken)
       if (adminClients.length === 0) {
-        // Fallback to Firestore
         try {
-          const firestoreDb = db() // db is a function that returns the Firestore instance
+          const firestoreDb = getDb()
           const snapshot = await getDocs(collection(firestoreDb, "clients"))
-          adminClients = snapshot.docs.map((doc) => {
-            const data = doc.data()
-            // Handle both email-based document IDs and uid-based document IDs
-            const uid = data.uid || doc.id
+          adminClients = snapshot.docs.map((clientDoc) => {
+            const data = clientDoc.data()
+            const uid = data.uid || clientDoc.id
+
             return {
-              uid: uid,
+              uid,
               name: data.name || "",
               email: data.email || "",
               planType: data.planType || "",
@@ -111,105 +116,106 @@ export default function AdminPage() {
             }
           }) as AdminClient[]
 
-          // Update stats from Firestore data if not available from API
           if (adminStats.totalClients === 0) {
             setStats({
               ...adminStats,
               totalClients: adminClients.length,
-              totalBeamCoins: adminClients.reduce((sum, c) => sum + (c.beamCoinBalance || 0), 0),
+              totalBeamCoins: adminClients.reduce(
+                (sum, currentClient) => sum + (currentClient.beamCoinBalance || 0),
+                0
+              ),
             })
           }
-        } catch (firestoreError: any) {
+        } catch (firestoreError) {
           console.error("Error loading clients from Firestore:", firestoreError)
-          // Continue with empty array if Firestore fails
           adminClients = []
         }
       }
-      setClients(adminClients)
 
-      // Load transactions from BEAM Ledger admin endpoint
       const adminTransactions = await getAdminTransactions(100, idToken)
+      setClients(adminClients)
       setTransactions(adminTransactions)
-    } catch (error: any) {
+      setLastLoadedAt(new Date())
+    } catch (error) {
       console.error("Error loading admin data:", error)
-      // Set empty arrays to prevent infinite loading
       setClients([])
       setTransactions([])
     } finally {
-      setLoading(false)
+      setPageLoading(false)
     }
   }
 
-  // Filter and sort clients
   const filteredAndSortedClients = useMemo(() => {
-    let filtered = clients.filter((client) => {
-      // Plan type filter
+    const filtered = clients.filter((client) => {
       if (planTypeFilter !== "all") {
         const clientPlanType = (client.planType || "").toLowerCase()
         const filterPlanType = planTypeFilter.toLowerCase()
+
         if (filterPlanType === "c suite" || filterPlanType === "c-suite") {
-          // Match "c suite", "c-suite", "csuite", etc.
-          if (!clientPlanType.includes("suite") && !clientPlanType.includes("c-suite") && !clientPlanType.includes("csuite")) {
+          if (
+            !clientPlanType.includes("suite") &&
+            !clientPlanType.includes("c-suite") &&
+            !clientPlanType.includes("csuite")
+          ) {
             return false
           }
         } else if (clientPlanType !== filterPlanType) {
           return false
         }
       }
-      
-      // Search query filter
+
       const query = searchQuery.toLowerCase()
-      if (query) {
-        return (
-          client.name?.toLowerCase().includes(query) ||
-          client.email?.toLowerCase().includes(query) ||
-          client.uid.toLowerCase().includes(query)
-        )
-      }
-      return true
+      if (!query) return true
+
+      return (
+        client.name?.toLowerCase().includes(query) ||
+        client.email?.toLowerCase().includes(query) ||
+        client.uid.toLowerCase().includes(query)
+      )
     })
 
-    if (sortField) {
-      filtered.sort((a, b) => {
-        let aVal: any = a[sortField as keyof AdminClient]
-        let bVal: any = b[sortField as keyof AdminClient]
-        if (typeof aVal === "string") {
-          aVal = aVal.toLowerCase()
-          bVal = (bVal || "").toLowerCase()
-        }
-        if (sortDirection === "asc") {
-          return aVal > bVal ? 1 : -1
-        } else {
-          return aVal < bVal ? 1 : -1
-        }
-      })
+    if (!sortField) {
+      return filtered
     }
 
-    return filtered
-  }, [clients, searchQuery, planTypeFilter, sortField, sortDirection])
+    return [...filtered].sort((a, b) => {
+      let aVal: any = a[sortField as keyof AdminClient]
+      let bVal: any = b[sortField as keyof AdminClient]
 
-  // Filter transactions
+      if (typeof aVal === "string") {
+        aVal = aVal.toLowerCase()
+        bVal = (bVal || "").toLowerCase()
+      }
+
+      if (sortDirection === "asc") {
+        return aVal > bVal ? 1 : -1
+      }
+
+      return aVal < bVal ? 1 : -1
+    })
+  }, [clients, planTypeFilter, searchQuery, sortDirection, sortField])
+
   const filteredTransactions = useMemo(() => {
     let filtered = transactions
-
     if (transactionTypeFilter !== "all") {
-      filtered = filtered.filter((t) => t.type === transactionTypeFilter)
+      filtered = filtered.filter((transaction) => transaction.type === transactionTypeFilter)
     }
 
-    return filtered.sort((a, b) => {
+    return [...filtered].sort((a, b) => {
       const aTime = new Date(a.timestamp).getTime()
       const bTime = new Date(b.timestamp).getTime()
-      return bTime - aTime // Most recent first
+      return bTime - aTime
     })
-  }, [transactions, transactionTypeFilter])
+  }, [transactionTypeFilter, transactions])
 
   const handleSort = (field: string) => {
     if (sortField === field) {
       setSortDirection(sortDirection === "asc" ? "desc" : "asc")
-    } else {
-      setSortField(field)
-      setSortDirection("asc")
+      return
     }
+
+    setSortField(field)
+    setSortDirection("asc")
   }
 
   const handleSignOut = async () => {
@@ -227,399 +233,417 @@ export default function AdminPage() {
     downloadCSV(csv, `beam-clients-${format(new Date(), "yyyy-MM-dd")}.csv`)
   }
 
-  if (authLoading || loading) {
+  if (authLoading || pageLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     )
   }
 
-  if (!user || user.uid !== adminUid) {
+  if (!user || !isBeamAdmin) {
     return null
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-bold bg-gradient-readyaimgo bg-clip-text text-transparent">
-              Admin Dashboard
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              BEAM Coin & Readyaimgo Client Management
-            </p>
-          </div>
-          <Button variant="outline" size="sm" onClick={handleSignOut}>
-            <LogOut className="h-4 w-4 mr-2" />
+    <AppShell
+      title="Admin control panel"
+      description="Monitor BEAM Coin activity, client growth, subscriptions, and exports inside the same system used across the rest of the platform."
+      eyebrow="Operations"
+      nav={[
+        { href: "/admin", label: "Admin", active: true },
+        { href: "/admin/projects", label: "Projects" },
+      ]}
+      actions={
+        <>
+          {lastLoadedAt ? (
+            <Badge variant="secondary">Updated {format(lastLoadedAt, "MMM d, yyyy h:mm a")}</Badge>
+          ) : null}
+          <Button onClick={() => router.push("/admin/projects")}>
+            Projects
+          </Button>
+          <Button variant="outline" onClick={loadAdminData}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh
+          </Button>
+          <Button variant="outline" onClick={handleSignOut}>
+            <LogOut className="mr-2 h-4 w-4" />
             Sign Out
           </Button>
+        </>
+      }
+      intro={
+        <div className="rounded-[28px] border border-white/75 bg-white/80 p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
+            Reporting scope
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Badge variant="accent">{stats.totalClients.toLocaleString()} clients</Badge>
+            <Badge variant="secondary">{stats.totalBeamCoins.toLocaleString()} BEAM</Badge>
+            <Badge>{`$${stats.totalUsdSubscriptions.toLocaleString()} MRR`}</Badge>
+          </div>
         </div>
-      </header>
+      }
+    >
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as TabValue)}>
+        <TabsList className="grid w-full grid-cols-2 gap-1 sm:grid-cols-4">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="clients">Clients</TabsTrigger>
+          <TabsTrigger value="transactions">Transactions</TabsTrigger>
+          <TabsTrigger value="reports">Reports</TabsTrigger>
+        </TabsList>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)}>
-          <TabsList className="grid w-full grid-cols-4 mb-6">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="clients">Clients</TabsTrigger>
-            <TabsTrigger value="transactions">Transactions</TabsTrigger>
-            <TabsTrigger value="reports">Reports</TabsTrigger>
-          </TabsList>
+        <TabsContent value="overview" className="space-y-6">
+          <div className="grid gap-4 md:grid-cols-3">
+            <MetricCard
+              icon={Coins}
+              label="Total BEAM Coins"
+              value={stats.totalBeamCoins.toLocaleString()}
+              detail="Current credits tracked across the platform."
+              tone="brand"
+            />
+            <MetricCard
+              icon={Users}
+              label="Total Clients"
+              value={stats.totalClients.toLocaleString()}
+              detail="Client accounts connected to the system."
+              tone="cool"
+            />
+            <MetricCard
+              icon={DollarSign}
+              label="Monthly Revenue"
+              value={`$${stats.totalUsdSubscriptions.toLocaleString()}`}
+              detail="Recurring subscription value reported by the platform."
+              tone="success"
+            />
+          </div>
 
-          {/* Overview Tab */}
-          <TabsContent value="overview" className="space-y-6">
-            {/* KPI Cards */}
-            <div className="grid gap-4 md:grid-cols-3">
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total BEAM Coins</CardTitle>
-                  <Coins className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{stats.totalBeamCoins.toLocaleString()}</div>
-                  <p className="text-xs text-muted-foreground">In circulation</p>
-                </CardContent>
-              </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Monthly BEAM Activity</CardTitle>
+              <CardDescription>
+                Earn versus spend behavior over time, styled in the same reporting surface as the
+                rest of the app.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {stats.monthlyActivity && stats.monthlyActivity.length > 0 ? (
+                <div className="space-y-4">
+                  {stats.monthlyActivity.map((month) => {
+                    const total = month.earn + month.spend
+                    const earnWidth = total ? `${(month.earn / total) * 100}%` : "0%"
+                    const spendWidth = total ? `${(month.spend / total) * 100}%` : "0%"
 
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total Clients</CardTitle>
-                  <Users className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{stats.totalClients.toLocaleString()}</div>
-                  <p className="text-xs text-muted-foreground">Active accounts</p>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total Subscriptions</CardTitle>
-                  <DollarSign className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">
-                    ${stats.totalUsdSubscriptions.toLocaleString()}
-                  </div>
-                  <p className="text-xs text-muted-foreground">Monthly recurring revenue</p>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Monthly Activity Chart Placeholder */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Monthly BEAM Activity</CardTitle>
-                <CardDescription>Earn vs Spend trends over time</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {stats.monthlyActivity && stats.monthlyActivity.length > 0 ? (
-                  <div className="space-y-4">
-                    {stats.monthlyActivity.map((month, idx) => (
-                      <div key={idx} className="flex items-center gap-4">
-                        <div className="w-24 text-sm text-muted-foreground">{month.month}</div>
-                        <div className="flex-1 flex gap-2">
+                    return (
+                      <div key={month.month} className="space-y-2">
+                        <div className="flex items-center justify-between gap-4">
+                          <p className="font-semibold text-slate-900">{month.month}</p>
+                          <p className="text-sm text-slate-500">
+                            +{month.earn} / -{month.spend}
+                          </p>
+                        </div>
+                        <div className="flex overflow-hidden rounded-full bg-muted/60">
                           <div
-                            className="bg-green-500 h-8 flex items-center justify-end pr-2 text-white text-sm rounded"
-                            style={{ width: `${(month.earn / (month.earn + month.spend)) * 100}%` }}
+                            className="flex h-9 items-center justify-end bg-emerald-500 px-3 text-xs font-semibold text-white"
+                            style={{ width: earnWidth }}
                           >
-                            {month.earn > 0 && `+${month.earn}`}
+                            {month.earn > 0 ? `+${month.earn}` : ""}
                           </div>
                           <div
-                            className="bg-red-500 h-8 flex items-center pl-2 text-white text-sm rounded"
-                            style={{ width: `${(month.spend / (month.earn + month.spend)) * 100}%` }}
+                            className="flex h-9 items-center bg-rose-500 px-3 text-xs font-semibold text-white"
+                            style={{ width: spendWidth }}
                           >
-                            {month.spend > 0 && `-${month.spend}`}
+                            {month.spend > 0 ? `-${month.spend}` : ""}
                           </div>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <TrendingUp className="h-12 w-12 mx-auto mb-2 opacity-50" />
-                    <p>Monthly activity data will appear here</p>
-                    <p className="text-xs mt-1">
-                      Once the BEAM Ledger admin stats endpoint includes monthly activity
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Clients Tab */}
-          <TabsContent value="clients" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>All Clients</CardTitle>
-                    <CardDescription>
-                      {filteredAndSortedClients.length} of {clients.length} clients
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Select
-                      value={planTypeFilter}
-                      onValueChange={setPlanTypeFilter}
-                    >
-                      <SelectTrigger className="w-40">
-                        <SelectValue placeholder="Filter by plan" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All Plans</SelectItem>
-                        <SelectItem value="c suite">C Suite</SelectItem>
-                        <SelectItem value="free">Free</SelectItem>
-                        <SelectItem value="standard">Standard</SelectItem>
-                        <SelectItem value="premium">Premium</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <div className="relative">
-                      <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Search clients..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-8 w-64"
-                      />
-                    </div>
-                  </div>
+                    )
+                  })}
                 </div>
-              </CardHeader>
-              <CardContent>
-                {filteredAndSortedClients.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b">
-                          <th
-                            className="text-left p-2 cursor-pointer hover:bg-muted"
-                            onClick={() => handleSort("name")}
-                          >
-                            <div className="flex items-center gap-1">
-                              Name
-                              <ArrowUpDown className="h-3 w-3" />
-                            </div>
-                          </th>
-                          <th
-                            className="text-left p-2 cursor-pointer hover:bg-muted"
-                            onClick={() => handleSort("email")}
-                          >
-                            <div className="flex items-center gap-1">
-                              Email
-                              <ArrowUpDown className="h-3 w-3" />
-                            </div>
-                          </th>
-                          <th className="text-left p-2">Plan</th>
-                          <th
-                            className="text-right p-2 cursor-pointer hover:bg-muted"
-                            onClick={() => handleSort("beamCoinBalance")}
-                          >
-                            <div className="flex items-center justify-end gap-1">
-                              BEAM Balance
-                              <ArrowUpDown className="h-3 w-3" />
-                            </div>
-                          </th>
-                          <th className="text-right p-2">Housing Wallet</th>
-                          <th className="text-left p-2">Last Active</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredAndSortedClients.map((client) => (
-                          <tr key={client.uid} className="border-b hover:bg-muted/50">
-                            <td className="p-2 font-medium">{client.name || "N/A"}</td>
-                            <td className="p-2 text-sm">{client.email || "N/A"}</td>
-                            <td className="p-2">
-                              <span className="px-2 py-1 text-xs rounded-full bg-secondary">
-                                {client.planType || "None"}
-                              </span>
-                            </td>
-                            <td className="p-2 text-right font-medium">
-                              {client.beamCoinBalance || 0}
-                            </td>
-                            <td className="p-2 text-right font-medium">
-                              ${((client.housingWalletBalance || 0) * 1.5).toFixed(2)}
-                            </td>
-                            <td className="p-2 text-sm text-muted-foreground">
-                              {client.lastActive
-                                ? format(new Date(client.lastActive), "MMM d, yyyy")
-                                : client.createdAt
-                                  ? format(new Date(client.createdAt), "MMM d, yyyy")
-                                  : "N/A"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="text-center text-muted-foreground py-8">No clients found</p>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
+              ) : (
+                <div className="py-12 text-center text-slate-500">
+                  <TrendingUp className="mx-auto mb-3 h-12 w-12 opacity-40" />
+                  <p className="font-medium text-slate-700">Monthly activity will appear here.</p>
+                  <p className="mt-2 text-sm">
+                    Once the admin stats endpoint exposes historical trends, this card is ready.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-          {/* Transactions Tab */}
-          <TabsContent value="transactions" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Recent Transactions</CardTitle>
-                    <CardDescription>
-                      {filteredTransactions.length} transactions
-                    </CardDescription>
-                  </div>
-                  <Select
-                    value={transactionTypeFilter}
-                    onValueChange={(v) => setTransactionTypeFilter(v as any)}
-                  >
-                    <SelectTrigger className="w-40">
-                      <SelectValue />
+        <TabsContent value="clients" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+                <div>
+                  <CardTitle>Client Directory</CardTitle>
+                  <CardDescription>
+                    {filteredAndSortedClients.length} of {clients.length} clients shown.
+                  </CardDescription>
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <Select value={planTypeFilter} onValueChange={setPlanTypeFilter}>
+                    <SelectTrigger className="w-full sm:w-44">
+                      <SelectValue placeholder="Filter by plan" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All Types</SelectItem>
-                      <SelectItem value="earn">Earn Only</SelectItem>
-                      <SelectItem value="spend">Spend Only</SelectItem>
+                      <SelectItem value="all">All Plans</SelectItem>
+                      <SelectItem value="c suite">C Suite</SelectItem>
+                      <SelectItem value="free">Free</SelectItem>
+                      <SelectItem value="standard">Standard</SelectItem>
+                      <SelectItem value="premium">Premium</SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {filteredTransactions.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="text-left p-2">UID</th>
-                          <th className="text-left p-2">Type</th>
-                          <th className="text-right p-2">Amount</th>
-                          <th className="text-left p-2">Description</th>
-                          <th className="text-left p-2">Timestamp</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredTransactions.map((transaction, idx) => (
-                          <tr key={transaction.id || idx} className="border-b hover:bg-muted/50">
-                            <td className="p-2 text-xs font-mono text-muted-foreground">
-                              {transaction.uid.substring(0, 8)}...
-                            </td>
-                            <td className="p-2">
-                              <span
-                                className={`px-2 py-1 text-xs rounded-full font-medium ${
-                                  transaction.type === "earn"
-                                    ? "bg-green-100 text-green-800"
-                                    : "bg-red-100 text-red-800"
-                                }`}
-                              >
-                                {transaction.type === "earn" ? "Earn" : "Spend"}
-                              </span>
-                            </td>
-                            <td
-                              className={`p-2 text-right font-medium ${
-                                transaction.type === "earn" ? "text-green-600" : "text-red-600"
-                              }`}
-                            >
-                              {transaction.type === "earn" ? "+" : "-"}
-                              {transaction.amount}
-                            </td>
-                            <td className="p-2 text-sm">{transaction.description}</td>
-                            <td className="p-2 text-sm text-muted-foreground">
-                              {format(new Date(transaction.timestamp), "MMM d, yyyy HH:mm")}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+
+                  <div className="relative w-full sm:w-72">
+                    <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <Input
+                      placeholder="Search clients..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-11"
+                    />
                   </div>
-                ) : (
-                  <p className="text-center text-muted-foreground py-8">No transactions found</p>
-                )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {filteredAndSortedClients.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="min-w-[820px] w-full text-left text-sm">
+                    <thead className="border-b border-border/70 text-xs uppercase tracking-[0.24em] text-slate-500">
+                      <tr>
+                        <th className="px-2 py-3 font-semibold">
+                          <button className="flex items-center gap-1" onClick={() => handleSort("name")}>
+                            Name
+                            <ArrowUpDown className="h-3.5 w-3.5" />
+                          </button>
+                        </th>
+                        <th className="px-2 py-3 font-semibold">
+                          <button className="flex items-center gap-1" onClick={() => handleSort("email")}>
+                            Email
+                            <ArrowUpDown className="h-3.5 w-3.5" />
+                          </button>
+                        </th>
+                        <th className="px-2 py-3 font-semibold">Plan</th>
+                        <th className="px-2 py-3 text-right font-semibold">
+                          <button
+                            className="ml-auto flex items-center gap-1"
+                            onClick={() => handleSort("beamCoinBalance")}
+                          >
+                            BEAM Balance
+                            <ArrowUpDown className="h-3.5 w-3.5" />
+                          </button>
+                        </th>
+                        <th className="px-2 py-3 text-right font-semibold">Housing Wallet</th>
+                        <th className="px-2 py-3 font-semibold">Last Active</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredAndSortedClients.map((client) => (
+                        <tr key={client.uid} className="border-b border-border/50 last:border-none">
+                          <td className="px-2 py-4 font-medium text-slate-900">
+                            {client.name || "N/A"}
+                          </td>
+                          <td className="px-2 py-4 text-slate-600">{client.email || "N/A"}</td>
+                          <td className="px-2 py-4">
+                            <Badge variant="secondary">{client.planType || "None"}</Badge>
+                          </td>
+                          <td className="px-2 py-4 text-right font-semibold text-slate-950">
+                            {client.beamCoinBalance || 0}
+                          </td>
+                          <td className="px-2 py-4 text-right font-semibold text-slate-950">
+                            ${((client.housingWalletBalance || 0) * 1.5).toFixed(2)}
+                          </td>
+                          <td className="px-2 py-4 text-slate-600">
+                            {client.lastActive
+                              ? format(new Date(client.lastActive), "MMM d, yyyy")
+                              : client.createdAt
+                                ? format(new Date(client.createdAt), "MMM d, yyyy")
+                                : "N/A"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="py-10 text-center text-sm text-slate-500">No clients found.</p>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="transactions" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <CardTitle>Recent Transactions</CardTitle>
+                  <CardDescription>
+                    {filteredTransactions.length} transactions currently visible.
+                  </CardDescription>
+                </div>
+                <Select
+                  value={transactionTypeFilter}
+                  onValueChange={(value) =>
+                    setTransactionTypeFilter(value as "all" | "earn" | "spend")
+                  }
+                >
+                  <SelectTrigger className="w-full sm:w-44">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Types</SelectItem>
+                    <SelectItem value="earn">Earn Only</SelectItem>
+                    <SelectItem value="spend">Spend Only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {filteredTransactions.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="min-w-[760px] w-full text-left text-sm">
+                    <thead className="border-b border-border/70 text-xs uppercase tracking-[0.24em] text-slate-500">
+                      <tr>
+                        <th className="px-2 py-3 font-semibold">UID</th>
+                        <th className="px-2 py-3 font-semibold">Type</th>
+                        <th className="px-2 py-3 text-right font-semibold">Amount</th>
+                        <th className="px-2 py-3 font-semibold">Description</th>
+                        <th className="px-2 py-3 font-semibold">Timestamp</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredTransactions.map((transaction, index) => (
+                        <tr
+                          key={transaction.id || `${transaction.uid}-${index}`}
+                          className="border-b border-border/50 last:border-none"
+                        >
+                          <td className="px-2 py-4 font-mono text-xs text-slate-500">
+                            {transaction.uid.substring(0, 8)}...
+                          </td>
+                          <td className="px-2 py-4">
+                            <Badge variant={transaction.type === "earn" ? "success" : "danger"}>
+                              {transaction.type === "earn" ? "Earn" : "Spend"}
+                            </Badge>
+                          </td>
+                          <td
+                            className={`px-2 py-4 text-right font-semibold ${
+                              transaction.type === "earn" ? "text-emerald-600" : "text-rose-600"
+                            }`}
+                          >
+                            {transaction.type === "earn" ? "+" : "-"}
+                            {transaction.amount}
+                          </td>
+                          <td className="px-2 py-4 text-slate-700">{transaction.description}</td>
+                          <td className="px-2 py-4 text-slate-600">
+                            {format(new Date(transaction.timestamp), "MMM d, yyyy h:mm a")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="py-10 text-center text-sm text-slate-500">No transactions found.</p>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="reports" className="space-y-4">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Export Data</CardTitle>
+                <CardDescription>
+                  Download transaction and client records for offline analysis.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="rounded-[24px] border border-border/70 bg-muted/35 p-5">
+                  <h3 className="text-lg font-semibold text-slate-950">Transactions CSV</h3>
+                  <p className="mt-2 text-sm leading-7 text-slate-600">
+                    Export UID, type, amount, description, and timestamp for the current
+                    transaction set.
+                  </p>
+                  <Button onClick={handleExportTransactions} className="mt-4 w-full">
+                    <Download className="mr-2 h-4 w-4" />
+                    Download Transactions CSV
+                  </Button>
+                </div>
+
+                <div className="rounded-[24px] border border-border/70 bg-white/80 p-5">
+                  <h3 className="text-lg font-semibold text-slate-950">Client Balances CSV</h3>
+                  <p className="mt-2 text-sm leading-7 text-slate-600">
+                    Export client names, plans, balances, and housing wallet values.
+                  </p>
+                  <Button onClick={handleExportClients} variant="outline" className="mt-4 w-full">
+                    <Download className="mr-2 h-4 w-4" />
+                    Download Client Balances CSV
+                  </Button>
+                </div>
               </CardContent>
             </Card>
-          </TabsContent>
 
-          {/* Reports Tab */}
-          <TabsContent value="reports" className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Export Data</CardTitle>
-                  <CardDescription>Download CSV reports for analysis</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <h3 className="text-sm font-medium mb-2">Transactions Export</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Export all transaction data including UID, type, amount, description, and
-                      timestamp.
+            <Card>
+              <CardHeader>
+                <CardTitle>Partner Reporting</CardTitle>
+                <CardDescription>
+                  Reserved cards for branded impact reporting and donor-ready exports.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {[
+                  "Marriott Impact Report",
+                  "Home Depot Impact Report",
+                  "PDF Receipt Generator",
+                ].map((item) => (
+                  <div key={item} className="rounded-[24px] border border-border/70 bg-white/80 p-5">
+                    <h3 className="text-lg font-semibold text-slate-950">{item}</h3>
+                    <p className="mt-2 text-sm leading-7 text-slate-600">
+                      Shared reporting surface prepared for future partner-specific deliverables.
                     </p>
-                    <Button onClick={handleExportTransactions} className="w-full">
-                      <Download className="h-4 w-4 mr-2" />
-                      Download Transactions CSV
+                    <Button disabled variant="outline" className="mt-4 w-full">
+                      Coming Soon
                     </Button>
                   </div>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
 
-                  <div className="border-t pt-4">
-                    <h3 className="text-sm font-medium mb-2">Client Balances Export</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Export all client data including balances, plans, and account information.
-                    </p>
-                    <Button onClick={handleExportClients} className="w-full" variant="outline">
-                      <Download className="h-4 w-4 mr-2" />
-                      Download Client Balances CSV
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
+      <div className="mt-8 grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5 flex items-center justify-between gap-4">
+          <div>
+            <p className="font-semibold text-slate-900">Projects</p>
+            <p className="text-sm text-slate-500 mt-0.5">
+              Create project records, review status badges, and open project detail pages.
+            </p>
+          </div>
+          <Button onClick={() => router.push("/admin/projects")} className="flex-shrink-0">
+            Open Projects
+          </Button>
+        </div>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle>Impact Reports</CardTitle>
-                  <CardDescription>Partner and donor reports (Coming Soon)</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <div className="p-4 border rounded-lg">
-                      <h3 className="text-sm font-medium mb-2">Marriott Impact Report</h3>
-                      <p className="text-xs text-muted-foreground mb-4">
-                        Monthly summary of BEAM Coin activity for Marriott partners.
-                      </p>
-                      <Button disabled variant="outline" className="w-full">
-                        Coming Soon
-                      </Button>
-                    </div>
-
-                    <div className="p-4 border rounded-lg">
-                      <h3 className="text-sm font-medium mb-2">Home Depot Impact Report</h3>
-                      <p className="text-xs text-muted-foreground mb-4">
-                        Monthly summary of BEAM Coin activity for Home Depot partners.
-                      </p>
-                      <Button disabled variant="outline" className="w-full">
-                        Coming Soon
-                      </Button>
-                    </div>
-
-                    <div className="p-4 border rounded-lg">
-                      <h3 className="text-sm font-medium mb-2">PDF Receipt Generator</h3>
-                      <p className="text-xs text-muted-foreground mb-4">
-                        Generate PDF receipts for donors and partners.
-                      </p>
-                      <Button disabled variant="outline" className="w-full">
-                        Coming Soon
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
-        </Tabs>
-      </main>
-    </div>
+        {/* ── Client impersonation quick link ─────────────────────────── */}
+        <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5 flex items-center justify-between gap-4">
+        <div>
+          <p className="font-semibold text-slate-900">Client view & RAG notes</p>
+          <p className="text-sm text-slate-500 mt-0.5">
+            View any client's dashboard as they see it and send pulse summaries or team notes directly into their portal.
+          </p>
+        </div>
+        <Button onClick={() => router.push("/admin/impersonate")} className="flex-shrink-0">
+          Open Client View
+        </Button>
+        </div>
+      </div>
+    </AppShell>
   )
 }

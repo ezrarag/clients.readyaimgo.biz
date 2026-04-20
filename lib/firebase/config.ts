@@ -104,6 +104,3 @@ export const getDb = (): Firestore => {
   return db
 }
 
-// Export for backward compatibility
-export { getApp as app, getAuthInstance as auth, getDb as db }
-

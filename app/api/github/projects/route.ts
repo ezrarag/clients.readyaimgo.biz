@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextResponse } from "next/server"
 
 interface GitHubRepo {
   id: number
@@ -25,47 +25,69 @@ interface Project {
   deploymentUrl: string | null
 }
 
-export async function GET(request: NextRequest) {
-  try {
-    const githubToken = process.env.GITHUB_TOKEN
-    const githubOrg = process.env.GITHUB_ORG || "readyaimgo"
-    
-    if (!githubToken) {
-      return NextResponse.json(
-        { error: "GitHub token not configured" },
-        { status: 500 }
-      )
-    }
+function buildGitHubReposUrl(account: string) {
+  const params = new URLSearchParams({
+    sort: "updated",
+    per_page: "20",
+    type: "owner",
+  })
 
-    // Fetch repositories from GitHub organization
-    const response = await fetch(
-      `https://api.github.com/orgs/${githubOrg}/repos?sort=updated&per_page=20`,
-      {
-        headers: {
-          Authorization: `token ${githubToken}`,
-          Accept: "application/vnd.github.v3+json",
-        },
-      }
-    )
+  return `https://api.github.com/users/${encodeURIComponent(account)}/repos?${params.toString()}`
+}
+
+async function fetchGitHubRepos(url: string, githubToken?: string) {
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  }
+
+  if (githubToken) {
+    headers.Authorization = `Bearer ${githubToken}`
+  }
+
+  return fetch(url, {
+    headers,
+    cache: "no-store",
+  })
+}
+
+export async function GET() {
+  try {
+    const githubToken = process.env.GITHUB_TOKEN?.trim()
+    const githubAccount = process.env.GITHUB_ORG?.trim() || "ezrarag"
+    const reposUrl = buildGitHubReposUrl(githubAccount)
+    let warning: string | null = null
+
+    let response = await fetchGitHubRepos(reposUrl, githubToken)
+
+    if (githubToken && response.status === 401) {
+      console.warn("GitHub token rejected; retrying public repo listing")
+      response = await fetchGitHubRepos(reposUrl)
+      warning = "GitHub token rejected. Showing public repositories only."
+    }
 
     if (!response.ok) {
       const error = await response.text()
-      console.error("GitHub API error:", error)
+      console.error("GitHub API error:", response.status, error)
+
+      const message =
+        response.status === 404
+          ? `GitHub account "${githubAccount}" was not found`
+          : "Failed to fetch repositories from GitHub"
+
       return NextResponse.json(
-        { error: "Failed to fetch repositories from GitHub" },
+        { error: message },
         { status: response.status }
       )
     }
 
     const repos: GitHubRepo[] = await response.json()
 
-    // Transform GitHub repos to project format
     const projects: Project[] = repos
-      .filter((repo) => !repo.name.includes("clients.readyaimgo.biz")) // Exclude this repo
+      .filter((repo) => !repo.name.includes("clients.readyaimgo.biz"))
       .map((repo) => {
-        // Try to infer Vercel deployment URL from repo name
-        // Format: https://{repo-name}.vercel.app or https://{repo-name}-{org}.vercel.app
-        const deploymentUrl = repo.homepage || 
+        const deploymentUrl =
+          repo.homepage ||
           `https://${repo.name.toLowerCase().replace(/[^a-z0-9-]/g, "-")}.vercel.app`
 
         return {
@@ -77,11 +99,11 @@ export async function GET(request: NextRequest) {
           language: repo.language,
           stars: repo.stargazers_count,
           updatedAt: repo.updated_at,
-          deploymentUrl: deploymentUrl,
+          deploymentUrl,
         }
       })
 
-    return NextResponse.json({ projects })
+    return NextResponse.json({ projects, warning })
   } catch (error: any) {
     console.error("Error fetching GitHub projects:", error)
     return NextResponse.json(
@@ -90,4 +112,3 @@ export async function GET(request: NextRequest) {
     )
   }
 }
-

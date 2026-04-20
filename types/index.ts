@@ -6,6 +6,18 @@ export interface Client {
   planType?: string
   beamCoinBalance: number
   housingWalletBalance: number
+  companyName?: string
+  contactTitle?: string
+  phone?: string
+  organizationType?: string
+  serviceInterests?: string[]
+  onboardingNotes?: string
+  onboardingStatus?: string
+  onboardingSource?: string
+  onboardingHandoffId?: string
+  claimedClientId?: string
+  claimedStoryId?: string
+  claimedClientName?: string
   createdAt?: Date
 }
 
@@ -31,4 +43,3 @@ export interface HousingWallet {
   value: number
   description: string
 }
-

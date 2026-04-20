@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getBeamBalance } from "@/lib/beamCoin"
-import { db } from "@/lib/firebase/config"
+import { getDb } from "@/lib/firebase/config"
 import { doc, getDoc, updateDoc, collection, query, where, getDocs } from "firebase/firestore"
 
 export async function GET(request: NextRequest) {
@@ -12,17 +12,18 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const firestoreDb = getDb()
     // Get live balance from BEAM Coin Ledger (uses Firebase UID)
     const beamBalance = await getBeamBalance(clientId)
     
     // Find client document by uid field (documents are keyed by email)
-    const clientsRef = collection(db, "clients")
+    const clientsRef = collection(firestoreDb, "clients")
     const q = query(clientsRef, where("uid", "==", clientId))
     const snapshot = await getDocs(q)
     
     if (!snapshot.empty) {
       const clientDoc = snapshot.docs[0]
-      await updateDoc(doc(db, "clients", clientDoc.id), {
+      await updateDoc(doc(firestoreDb, "clients", clientDoc.id), {
         beamCoinBalance: beamBalance.balance,
         beamCoinLastUpdated: new Date(),
       })
@@ -38,7 +39,8 @@ export async function GET(request: NextRequest) {
     
     // Fallback to cached balance if ledger is unavailable
     try {
-      const clientsRef = collection(db, "clients")
+      const firestoreDb = getDb()
+      const clientsRef = collection(firestoreDb, "clients")
       const q = query(clientsRef, where("uid", "==", clientId))
       const snapshot = await getDocs(q)
       

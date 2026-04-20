@@ -81,6 +81,8 @@ NEXT_PUBLIC_ADMIN_UID=your_firebase_user_uid
 
 # App URL
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+# Marketing site URL for onboarding handoffs
+NEXT_PUBLIC_MARKETING_SITE_URL=https://readyaimgo.biz
 
 # BEAM Coin Ledger API
 NEXT_PUBLIC_BEAM_LEDGER_URL=https://beam-coin-ledger.vercel.app
@@ -235,4 +237,3 @@ For issues or questions, contact the Readyaimgo team.
 ---
 
 Built with ❤️ for Readyaimgo clients
-

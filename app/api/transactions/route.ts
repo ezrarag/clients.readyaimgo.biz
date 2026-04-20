@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { db } from "@/lib/firebase/config"
+import { getDb } from "@/lib/firebase/config"
 import { collection, query, where, getDocs, addDoc, orderBy } from "firebase/firestore"
 
 export async function GET(request: NextRequest) {
@@ -11,8 +11,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const firestoreDb = getDb()
     const transactionsQuery = query(
-      collection(db, "transactions"),
+      collection(firestoreDb, "transactions"),
       where("clientId", "==", clientId),
       orderBy("timestamp", "desc")
     )
@@ -33,6 +34,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const { clientId, type, amount, description } = await request.json()
+    const firestoreDb = getDb()
 
     if (!clientId || !type || amount === undefined || !description) {
       return NextResponse.json(
@@ -49,7 +51,7 @@ export async function POST(request: NextRequest) {
       timestamp: new Date(),
     }
 
-    const docRef = await addDoc(collection(db, "transactions"), transactionData)
+    const docRef = await addDoc(collection(firestoreDb, "transactions"), transactionData)
 
     return NextResponse.json({ id: docRef.id, ...transactionData })
   } catch (error: any) {
@@ -57,4 +59,3 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
-
