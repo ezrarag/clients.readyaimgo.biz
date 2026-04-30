@@ -100,6 +100,7 @@ export default function AdminProjectsPage() {
       nav={[
         { href: "/admin", label: "Admin" },
         { href: "/admin/projects", label: "Projects", active: true },
+        { href: "/admin/organizations", label: "Organizations" },
       ]}
       actions={
         <>

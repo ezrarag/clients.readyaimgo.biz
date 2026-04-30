@@ -66,6 +66,7 @@ export default function AdminPage() {
   const [sortField, setSortField] = useState<string>("")
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc")
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null)
+  const [partnerActionEmail, setPartnerActionEmail] = useState<string | null>(null)
   const isBeamAdmin = effectiveRoles.includes("beam-admin")
 
   useEffect(() => {
@@ -96,38 +97,60 @@ export default function AdminPage() {
       setStats(adminStats)
 
       let adminClients = await getAdminClients(idToken)
-      if (adminClients.length === 0) {
-        try {
-          const firestoreDb = getDb()
-          const snapshot = await getDocs(collection(firestoreDb, "clients"))
-          adminClients = snapshot.docs.map((clientDoc) => {
-            const data = clientDoc.data()
-            const uid = data.uid || clientDoc.id
+      try {
+        const firestoreDb = getDb()
+        const snapshot = await getDocs(collection(firestoreDb, "clients"))
+        const firestoreClients = snapshot.docs.map((clientDoc) => {
+          const data = clientDoc.data()
+          const uid = data.uid || clientDoc.id
+
+          return {
+            uid,
+            name: data.name || "",
+            email: data.email || clientDoc.id,
+            planType: data.planType || "",
+            beamCoinBalance: data.beamCoinBalance || 0,
+            housingWalletBalance: data.housingWalletBalance || 0,
+            stripeCustomerId: data.stripeCustomerId || "",
+            partnerTier: data.partnerTier === "agency" ? "agency" : data.partnerTier ?? null,
+            createdAt: data.createdAt?.toDate?.()?.toISOString() || data.createdAt || "",
+          }
+        }) as AdminClient[]
+
+        if (adminClients.length === 0) {
+          adminClients = firestoreClients
+        } else {
+          const firestoreClientsByEmail = new Map(
+            firestoreClients
+              .filter((client) => client.email)
+              .map((client) => [client.email?.toLowerCase().trim(), client])
+          )
+
+          adminClients = adminClients.map((client) => {
+            const firestoreClient = client.email
+              ? firestoreClientsByEmail.get(client.email.toLowerCase().trim())
+              : null
 
             return {
-              uid,
-              name: data.name || "",
-              email: data.email || "",
-              planType: data.planType || "",
-              beamCoinBalance: data.beamCoinBalance || 0,
-              housingWalletBalance: data.housingWalletBalance || 0,
-              stripeCustomerId: data.stripeCustomerId || "",
-              createdAt: data.createdAt?.toDate?.()?.toISOString() || data.createdAt || "",
+              ...client,
+              partnerTier: firestoreClient?.partnerTier ?? client.partnerTier ?? null,
             }
-          }) as AdminClient[]
+          })
+        }
 
-          if (adminStats.totalClients === 0) {
-            setStats({
-              ...adminStats,
-              totalClients: adminClients.length,
-              totalBeamCoins: adminClients.reduce(
-                (sum, currentClient) => sum + (currentClient.beamCoinBalance || 0),
-                0
-              ),
-            })
-          }
-        } catch (firestoreError) {
-          console.error("Error loading clients from Firestore:", firestoreError)
+        if (adminStats.totalClients === 0) {
+          setStats({
+            ...adminStats,
+            totalClients: adminClients.length,
+            totalBeamCoins: adminClients.reduce(
+              (sum, currentClient) => sum + (currentClient.beamCoinBalance || 0),
+              0
+            ),
+          })
+        }
+      } catch (firestoreError) {
+        console.error("Error loading clients from Firestore:", firestoreError)
+        if (adminClients.length === 0) {
           adminClients = []
         }
       }
@@ -233,6 +256,43 @@ export default function AdminPage() {
     downloadCSV(csv, `beam-clients-${format(new Date(), "yyyy-MM-dd")}.csv`)
   }
 
+  const handlePartnerAction = async (
+    client: AdminClient,
+    action: "grant" | "revoke"
+  ) => {
+    if (!client.email) {
+      return
+    }
+
+    setPartnerActionEmail(client.email)
+
+    try {
+      const response = await fetch("/api/admin/grant-partner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: client.email, action, callerEmail: user?.email }),
+      })
+      const payload: unknown = await response.json()
+
+      if (!response.ok) {
+        const message =
+          typeof payload === "object" &&
+          payload !== null &&
+          "error" in payload &&
+          typeof payload.error === "string"
+            ? payload.error
+            : "Unable to update partner status."
+        throw new Error(message)
+      }
+
+      await loadAdminData()
+    } catch (partnerError) {
+      console.error("Error updating partner status:", partnerError)
+    } finally {
+      setPartnerActionEmail(null)
+    }
+  }
+
   if (authLoading || pageLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -253,6 +313,7 @@ export default function AdminPage() {
       nav={[
         { href: "/admin", label: "Admin", active: true },
         { href: "/admin/projects", label: "Projects" },
+        { href: "/admin/organizations", label: "Organizations" },
       ]}
       actions={
         <>
@@ -412,7 +473,7 @@ export default function AdminPage() {
             <CardContent>
               {filteredAndSortedClients.length > 0 ? (
                 <div className="overflow-x-auto">
-                  <table className="min-w-[820px] w-full text-left text-sm">
+                  <table className="min-w-[960px] w-full text-left text-sm">
                     <thead className="border-b border-border/70 text-xs uppercase tracking-[0.24em] text-slate-500">
                       <tr>
                         <th className="px-2 py-3 font-semibold">
@@ -428,6 +489,7 @@ export default function AdminPage() {
                           </button>
                         </th>
                         <th className="px-2 py-3 font-semibold">Plan</th>
+                        <th className="px-2 py-3 font-semibold">Partner</th>
                         <th className="px-2 py-3 text-right font-semibold">
                           <button
                             className="ml-auto flex items-center gap-1"
@@ -450,6 +512,32 @@ export default function AdminPage() {
                           <td className="px-2 py-4 text-slate-600">{client.email || "N/A"}</td>
                           <td className="px-2 py-4">
                             <Badge variant="secondary">{client.planType || "None"}</Badge>
+                          </td>
+                          <td className="px-2 py-4">
+                            {client.partnerTier === "agency" ? (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="accent">Agency</Badge>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={partnerActionEmail === client.email}
+                                  onClick={() => void handlePartnerAction(client, "revoke")}
+                                >
+                                  Revoke
+                                </Button>
+                              </div>
+                            ) : (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={!client.email || partnerActionEmail === client.email}
+                                onClick={() => void handlePartnerAction(client, "grant")}
+                              >
+                                Grant agency
+                              </Button>
+                            )}
                           </td>
                           <td className="px-2 py-4 text-right font-semibold text-slate-950">
                             {client.beamCoinBalance || 0}

@@ -288,4 +288,18 @@ export async function upsertClientAccountRecord({
     },
     { merge: true }
   )
+
+  if (handoff?.id) {
+    try {
+      await fetch(`/api/partner/referrals/${handoff.id}/convert`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "x-rag-internal-secret": process.env.RAG_INTERNAL_SECRET ?? "",
+        },
+      })
+    } catch {
+      // non-fatal
+    }
+  }
 }

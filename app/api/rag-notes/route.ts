@@ -16,16 +16,16 @@ function getAdminDb() {
 }
 
 // POST /api/rag-notes
-// Body: { clientEmail, subject, body, type, authorName, authorEmail }
+// Body: { clientEmail?, orgId?, subject, body, type, authorName, authorEmail }
 // Writes a RAG team note to Firestore so it appears in the client's dashboard.
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { clientEmail, subject, body: noteBody, type, authorName, authorEmail } = body
+    const { clientEmail, orgId, subject, body: noteBody, type, authorName, authorEmail } = body
 
-    if (!clientEmail || !subject || !noteBody) {
+    if ((!clientEmail && !orgId) || !subject || !noteBody) {
       return NextResponse.json(
-        { error: "clientEmail, subject, and body are required" },
+        { error: "clientEmail or orgId, subject, and body are required" },
         { status: 400 }
       )
     }
@@ -38,7 +38,8 @@ export async function POST(request: NextRequest) {
 
     await ref.set({
       id: ref.id,
-      clientEmail: clientEmail.toLowerCase().trim(),
+      clientEmail: clientEmail ? clientEmail.toLowerCase().trim() : null,
+      orgId: typeof orgId === "string" && orgId.trim() ? orgId.trim() : null,
       subject: subject.trim(),
       body: noteBody.trim(),
       type: noteType,
@@ -49,17 +50,32 @@ export async function POST(request: NextRequest) {
       updatedAt: FieldValue.serverTimestamp(),
     })
 
-    // Also bump the client doc so their dashboard shows "new" indicator
-    await db
-      .collection("clients")
-      .doc(clientEmail.toLowerCase().trim())
-      .set(
-        {
-          hasUnreadRagNotes: true,
-          lastRagNoteAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      )
+    if (clientEmail) {
+      await db
+        .collection("clients")
+        .doc(clientEmail.toLowerCase().trim())
+        .set(
+          {
+            hasUnreadRagNotes: true,
+            lastRagNoteAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+    }
+
+    if (typeof orgId === "string" && orgId.trim()) {
+      await db
+        .collection("organizations")
+        .doc(orgId.trim())
+        .set(
+          {
+            hasUnreadRagNotes: true,
+            lastRagNoteAt: FieldValue.serverTimestamp(),
+            lastActivityAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+    }
 
     return NextResponse.json({ success: true, noteId: ref.id })
   } catch (error: any) {
@@ -68,24 +84,31 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// GET /api/rag-notes?clientEmail=xxx
-// Returns all RAG notes for a client, newest first.
+// GET /api/rag-notes?clientEmail=xxx or /api/rag-notes?orgId=xxx
+// Returns all RAG notes for a client/org, newest first.
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const clientEmail = searchParams.get("clientEmail")?.toLowerCase().trim()
+    const orgId = searchParams.get("orgId")?.trim()
 
-    if (!clientEmail) {
-      return NextResponse.json({ error: "clientEmail required" }, { status: 400 })
+    if (!clientEmail && !orgId) {
+      return NextResponse.json({ error: "clientEmail or orgId required" }, { status: 400 })
     }
 
     const db = getAdminDb()
-    const snap = await db
-      .collection("ragNotes")
-      .where("clientEmail", "==", clientEmail)
-      .orderBy("createdAt", "desc")
-      .limit(20)
-      .get()
+    const baseQuery = db.collection("ragNotes")
+    const snap = orgId
+      ? await baseQuery
+          .where("orgId", "==", orgId)
+          .orderBy("createdAt", "desc")
+          .limit(20)
+          .get()
+      : await baseQuery
+          .where("clientEmail", "==", clientEmail)
+          .orderBy("createdAt", "desc")
+          .limit(20)
+          .get()
 
     const notes = snap.docs.map((d) => ({
       ...d.data(),
@@ -102,7 +125,7 @@ export async function GET(request: NextRequest) {
 // PATCH /api/rag-notes — mark a note as read
 export async function PATCH(request: NextRequest) {
   try {
-    const { noteId, clientEmail } = await request.json()
+    const { noteId, clientEmail, orgId } = await request.json()
     if (!noteId) return NextResponse.json({ error: "noteId required" }, { status: 400 })
 
     const db = getAdminDb()
@@ -124,6 +147,22 @@ export async function PATCH(request: NextRequest) {
         await db
           .collection("clients")
           .doc(clientEmail.toLowerCase().trim())
+          .set({ hasUnreadRagNotes: false }, { merge: true })
+      }
+    }
+
+    if (orgId) {
+      const remaining = await db
+        .collection("ragNotes")
+        .where("orgId", "==", orgId)
+        .where("read", "==", false)
+        .limit(1)
+        .get()
+
+      if (remaining.empty) {
+        await db
+          .collection("organizations")
+          .doc(orgId)
           .set({ hasUnreadRagNotes: false }, { merge: true })
       }
     }

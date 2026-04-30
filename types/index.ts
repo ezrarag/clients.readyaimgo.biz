@@ -18,6 +18,11 @@ export interface Client {
   claimedClientId?: string
   claimedStoryId?: string
   claimedClientName?: string
+  partnerTier?: "agency" | null
+  partnerSince?: Date | null
+  partnerCommissionPct?: number
+  partnerReferralCount?: number
+  orgId?: string
   createdAt?: Date
 }
 

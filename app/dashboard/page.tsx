@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { hasAnyRole } from "@/lib/beam"
-import { findClientPortalProjectByEmail } from "@/lib/client-portal"
+import { resolveClientDestination } from "@/lib/client-portal"
 import { CLIENT_SERVICE_OPTIONS } from "@/lib/client-onboarding"
 import { signOut } from "@/lib/firebase/auth"
 import { getDb } from "@/lib/firebase/config"
@@ -107,14 +107,17 @@ function DashboardPageContent() {
 
     let cancelled = false
 
-    const maybeRedirectToPortal = async () => {
-      const portalProject = await findClientPortalProjectByEmail(getDb(), user.email)
-      if (!cancelled && portalProject) {
-        router.replace(`/portal/${portalProject.clientId}`)
+    const maybeRedirectToWorkspace = async () => {
+      const destination = await resolveClientDestination(getDb(), user.email, {
+        uid: user.uid,
+        name: user.displayName,
+      })
+      if (!cancelled && destination !== "/dashboard") {
+        router.replace(destination)
       }
     }
 
-    void maybeRedirectToPortal()
+    void maybeRedirectToWorkspace()
 
     return () => {
       cancelled = true
@@ -184,6 +187,16 @@ function DashboardPageContent() {
         claimedClientId: docData.claimedClientId || "",
         claimedStoryId: docData.claimedStoryId || "",
         claimedClientName: docData.claimedClientName || "",
+        partnerTier: docData.partnerTier === "agency" ? "agency" : docData.partnerTier ?? null,
+        partnerSince: docData.partnerSince?.toDate?.() || docData.partnerSince || null,
+        partnerCommissionPct:
+          typeof docData.partnerCommissionPct === "number"
+            ? docData.partnerCommissionPct
+            : undefined,
+        partnerReferralCount:
+          typeof docData.partnerReferralCount === "number"
+            ? docData.partnerReferralCount
+            : undefined,
         createdAt: docData.createdAt?.toDate?.() || docData.createdAt,
       }
 
@@ -488,6 +501,9 @@ function DashboardPageContent() {
         nav={[
           { href: "/dashboard", label: "Dashboard", active: true },
           ...(isBeamAdmin && !viewAsParticipant ? [{ href: "/admin", label: "Admin" }] : []),
+          ...(client?.partnerTier === "agency"
+            ? [{ href: "/partner", label: "Partner" }]
+            : []),
           { href: "/settings", label: "Settings" },
         ]}
         actions={

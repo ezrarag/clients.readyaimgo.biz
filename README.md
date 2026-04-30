@@ -78,6 +78,7 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 
 # Admin
 NEXT_PUBLIC_ADMIN_UID=your_firebase_user_uid
+RAG_INTERNAL_SECRET=replace_with_a_long_random_secret
 
 # App URL
 NEXT_PUBLIC_APP_URL=http://localhost:3000
@@ -87,6 +88,9 @@ NEXT_PUBLIC_MARKETING_SITE_URL=https://readyaimgo.biz
 # BEAM Coin Ledger API
 NEXT_PUBLIC_BEAM_LEDGER_URL=https://beam-coin-ledger.vercel.app
 NEXT_PUBLIC_BEAM_LEDGER_ADMIN_URL=https://beam-coin-ledger.vercel.app
+
+# AI task extraction
+ANTHROPIC_API_KEY=sk-ant_your_anthropic_key
 ```
 
 ### 5. Firestore Security Rules

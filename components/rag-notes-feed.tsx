@@ -3,9 +3,11 @@
 import { useEffect, useState } from "react"
 import { format } from "date-fns"
 import { CheckCircle2, Loader2, MessageSquare, Zap, RefreshCw } from "lucide-react"
+import { collection, onSnapshot, orderBy, query, where } from "firebase/firestore"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { getDb } from "@/lib/firebase/config"
 
 interface RagNote {
   id: string
@@ -18,7 +20,8 @@ interface RagNote {
 }
 
 interface RagNotesFeedProps {
-  clientEmail: string
+  clientEmail?: string
+  orgId?: string
 }
 
 const typeConfig = {
@@ -42,17 +45,20 @@ const typeConfig = {
   },
 }
 
-export function RagNotesFeed({ clientEmail }: RagNotesFeedProps) {
+export function RagNotesFeed({ clientEmail, orgId }: RagNotesFeedProps) {
   const [notes, setNotes] = useState<RagNote[]>([])
   const [loading, setLoading] = useState(true)
   const [markingRead, setMarkingRead] = useState<string | null>(null)
 
   const load = async () => {
-    if (!clientEmail) return
+    if (!clientEmail && !orgId) return
     setLoading(true)
     try {
+      const params = orgId
+        ? `orgId=${encodeURIComponent(orgId)}`
+        : `clientEmail=${encodeURIComponent(clientEmail ?? "")}`
       const res = await fetch(
-        `/api/rag-notes?clientEmail=${encodeURIComponent(clientEmail)}`
+        `/api/rag-notes?${params}`
       )
       if (res.ok) {
         const data = await res.json()
@@ -66,9 +72,47 @@ export function RagNotesFeed({ clientEmail }: RagNotesFeedProps) {
   }
 
   useEffect(() => {
+    if (orgId) {
+      setLoading(true)
+      const unsubscribe = onSnapshot(
+        query(
+          collection(getDb(), "ragNotes"),
+          where("orgId", "==", orgId),
+          orderBy("createdAt", "desc")
+        ),
+        (snapshot) => {
+          setNotes(
+            snapshot.docs.map((noteDoc) => {
+              const data = noteDoc.data()
+
+              return {
+                id: noteDoc.id,
+                subject: typeof data.subject === "string" ? data.subject : "",
+                body: typeof data.body === "string" ? data.body : "",
+                type:
+                  data.type === "pulse" || data.type === "update" || data.type === "note"
+                    ? data.type
+                    : "note",
+                authorName:
+                  typeof data.authorName === "string" ? data.authorName : "Readyaimgo Team",
+                read: data.read === true,
+                createdAt: data.createdAt?.toDate?.()?.toISOString() ?? null,
+              }
+            })
+          )
+          setLoading(false)
+        },
+        () => {
+          setLoading(false)
+        }
+      )
+
+      return () => unsubscribe()
+    }
+
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientEmail])
+  }, [clientEmail, orgId])
 
   const markRead = async (noteId: string) => {
     setMarkingRead(noteId)
@@ -76,7 +120,7 @@ export function RagNotesFeed({ clientEmail }: RagNotesFeedProps) {
       await fetch("/api/rag-notes", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ noteId, clientEmail }),
+        body: JSON.stringify({ noteId, clientEmail, orgId }),
       })
       setNotes((prev) =>
         prev.map((n) => (n.id === noteId ? { ...n, read: true } : n))

@@ -1,6 +1,7 @@
 import { initializeApp, getApps, FirebaseApp } from "firebase/app"
 import { getAuth, Auth } from "firebase/auth"
 import { getFirestore, Firestore } from "firebase/firestore"
+import { getStorage, FirebaseStorage } from "firebase/storage"
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -27,6 +28,7 @@ const isConfigValid = () => {
 let app: FirebaseApp | null = null
 let auth: Auth | null = null
 let db: Firestore | null = null
+let storage: FirebaseStorage | null = null
 
 const initializeFirebase = () => {
   if (app) return // Already initialized
@@ -45,6 +47,7 @@ const initializeFirebase = () => {
     
     auth = getAuth(app)
     db = getFirestore(app)
+    storage = getStorage(app)
   } catch (error) {
     console.error("Firebase initialization error:", error)
     throw error
@@ -104,3 +107,12 @@ export const getDb = (): Firestore => {
   return db
 }
 
+export const getStorageInstance = (): FirebaseStorage => {
+  if (!storage && isConfigValid()) {
+    initializeFirebase()
+  }
+  if (!storage) {
+    throw new Error("Firebase Storage is not initialized. Please check your environment variables.")
+  }
+  return storage
+}

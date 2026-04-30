@@ -96,7 +96,10 @@ function LoginPageContent() {
         let cancelled = false
 
         const redirectSignedInUser = async () => {
-          const destination = await resolveClientDestination(getDb(), user.email)
+          const destination = await resolveClientDestination(getDb(), user.email, {
+            uid: user.uid,
+            name: user.displayName,
+          })
           if (!cancelled) {
             router.push(destination)
           }
@@ -146,7 +149,10 @@ function LoginPageContent() {
         })
 
         if (!cancelled) {
-          const destination = await resolveClientDestination(firestoreDb, user.email)
+          const destination = await resolveClientDestination(firestoreDb, user.email, {
+            uid: user.uid,
+            name: user.displayName,
+          })
           router.push(destination)
         }
       } catch (persistError) {
@@ -216,7 +222,10 @@ function LoginPageContent() {
 
       const firestoreDb = getDb()
       await persistIfNeeded(result.user)
-      const destination = await resolveClientDestination(firestoreDb, result.user.email)
+      const destination = await resolveClientDestination(firestoreDb, result.user.email, {
+        uid: result.user.uid,
+        name: result.user.displayName,
+      })
       router.push(destination)
     } catch (submitError) {
       setError(
@@ -238,7 +247,10 @@ function LoginPageContent() {
 
       const firestoreDb = getDb()
       await persistIfNeeded(result.user)
-      const destination = await resolveClientDestination(firestoreDb, result.user.email)
+      const destination = await resolveClientDestination(firestoreDb, result.user.email, {
+        uid: result.user.uid,
+        name: result.user.displayName,
+      })
       router.push(destination)
     } catch (googleError) {
       setError(

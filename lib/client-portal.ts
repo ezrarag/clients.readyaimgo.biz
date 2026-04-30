@@ -79,8 +79,42 @@ export async function findClientPortalProjectByIdAndEmail({
 
 export async function resolveClientDestination(
   firestoreDb: Firestore,
-  email?: string | null
+  email?: string | null,
+  user?: {
+    uid?: string | null
+    name?: string | null
+  }
 ) {
+  const normalizedEmail = normalizeEmail(email)
+
+  if (normalizedEmail && typeof window !== "undefined") {
+    try {
+      const response = await fetch("/api/organizations/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: normalizedEmail,
+          uid: user?.uid ?? null,
+          name: user?.name ?? null,
+        }),
+      })
+      const payload: unknown = await response.json()
+
+      if (
+        response.ok &&
+        typeof payload === "object" &&
+        payload !== null &&
+        "orgId" in payload &&
+        typeof payload.orgId === "string" &&
+        payload.orgId
+      ) {
+        return `/org/${payload.orgId}/dashboard`
+      }
+    } catch (error) {
+      console.error("Unable to resolve organization destination:", error)
+    }
+  }
+
   const project = await findClientPortalProjectByEmail(firestoreDb, email)
   if (!project) {
     return "/dashboard"

@@ -16,6 +16,7 @@ export interface AdminClient {
   housingWalletBalance: number
   stripeCustomerId?: string
   lastActive?: string
+  partnerTier?: "agency" | null
   createdAt?: string
 }
 
@@ -192,5 +193,4 @@ export function downloadCSV(content: string, filename: string) {
   link.click()
   document.body.removeChild(link)
 }
-
 

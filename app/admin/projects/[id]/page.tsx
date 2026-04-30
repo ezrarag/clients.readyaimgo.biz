@@ -110,6 +110,7 @@ export default function AdminProjectDetailPage() {
       nav={[
         { href: "/admin", label: "Admin" },
         { href: "/admin/projects", label: "Projects" },
+        { href: "/admin/organizations", label: "Organizations" },
         { href: `/admin/projects/${projectId}`, label: projectId, active: true },
       ]}
       actions={
