@@ -218,6 +218,85 @@ async function handleValueProfileCheckoutCompleted(session: Stripe.Checkout.Sess
   }
 }
 
+async function handleDeliverableCheckoutCompleted(session: Stripe.Checkout.Session) {
+  if (session.payment_status !== "paid") return
+
+  const clientId = session.metadata?.clientId?.trim().toLowerCase()
+  const deliverableId = session.metadata?.deliverableId?.trim()
+  if (!clientId || !deliverableId) {
+    console.warn("Deliverable payment missing metadata:", session.id)
+    return
+  }
+
+  const db = getAdminDb()
+  const deliverableRef = db
+    .collection("clients")
+    .doc(clientId)
+    .collection("deliverables")
+    .doc(deliverableId)
+  const paymentIntentId =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.payment_intent?.id
+  const amount = (session.amount_total ?? 0) / 100
+
+  const result = await db.runTransaction(async (transaction) => {
+    const deliverableSnapshot = await transaction.get(deliverableRef)
+    if (!deliverableSnapshot.exists) {
+      return { missing: true, duplicate: false }
+    }
+
+    const data = deliverableSnapshot.data() as Record<string, unknown>
+    if (data.status === "paid") {
+      return { missing: false, duplicate: true }
+    }
+
+    transaction.set(
+      deliverableRef,
+      {
+        status: "paid",
+        paidAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        stripeCheckoutSessionId: session.id,
+        stripePaymentIntentId: paymentIntentId ?? null,
+        paidByEmail:
+          session.customer_details?.email ||
+          session.metadata?.clientEmail ||
+          null,
+      },
+      { merge: true }
+    )
+
+    return {
+      missing: false,
+      duplicate: false,
+      title: typeof data.title === "string" ? data.title : "Deliverable",
+    }
+  })
+
+  if (result.missing) {
+    console.warn("Deliverable payment target not found:", {
+      checkoutSessionId: session.id,
+      clientId,
+      deliverableId,
+    })
+    return
+  }
+
+  if (!result.duplicate) {
+    await db.collection("transactions").add({
+      clientId,
+      type: "payment",
+      amount,
+      timestamp: FieldValue.serverTimestamp(),
+      description: `Deliverable payment - ${result.title}`,
+      stripeCheckoutSessionId: session.id,
+      stripePaymentIntentId: paymentIntentId ?? null,
+      deliverableId,
+    })
+  }
+}
+
 async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
   const customerId = subscription.customer as string
   const db = getAdminDb()
@@ -303,6 +382,9 @@ export async function handleStripeWebhook(request: NextRequest) {
         const session = event.data.object as Stripe.Checkout.Session
         if (session.metadata?.purpose === "value_profile_payment") {
           await handleValueProfileCheckoutCompleted(session)
+        }
+        if (session.metadata?.purpose === "deliverable_payment") {
+          await handleDeliverableCheckoutCompleted(session)
         }
         break
       }

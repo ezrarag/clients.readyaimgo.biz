@@ -3,8 +3,7 @@
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { format } from "date-fns"
-import { Loader2, LogOut, RefreshCw, UserPlus } from "lucide-react"
-import { doc, getDoc } from "firebase/firestore"
+import { CreditCard, ExternalLink, ImageIcon, Loader2, LogOut, Plus, RefreshCw, UserPlus } from "lucide-react"
 
 import { useAuth } from "@/components/auth/AuthProvider"
 import { ProjectStatusBadge } from "@/components/admin/project-status-badge"
@@ -12,9 +11,22 @@ import { AppShell } from "@/components/site/app-shell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { normalizeBeamProjectDocument, type BeamProject } from "@/lib/beam"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { type BeamProject } from "@/lib/beam"
+import { type ClientDeliverable } from "@/lib/deliverables"
 import { signOut } from "@/lib/firebase/auth"
-import { getDb } from "@/lib/firebase/config"
+
+const currencyFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+})
+
+function formatCurrency(value: number) {
+  return currencyFormatter.format(value)
+}
 
 function FieldRow({ label, value }: { label: string; value: string }) {
   return (
@@ -31,8 +43,19 @@ export default function AdminProjectDetailPage() {
   const { user, effectiveRoles, loading: authLoading } = useAuth()
   const [project, setProject] = useState<BeamProject | null>(null)
   const [pageLoading, setPageLoading] = useState(true)
+  const [deliverables, setDeliverables] = useState<ClientDeliverable[]>([])
+  const [deliverablesLoading, setDeliverablesLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [inviteStatus, setInviteStatus] = useState<string | null>(null)
+  const [deliverableTitle, setDeliverableTitle] = useState("")
+  const [deliverableDescription, setDeliverableDescription] = useState("")
+  const [deliverableLiveUrl, setDeliverableLiveUrl] = useState("")
+  const [deliverableScreenshots, setDeliverableScreenshots] = useState("")
+  const [deliverableRecordingUrl, setDeliverableRecordingUrl] = useState("")
+  const [deliverableAmount, setDeliverableAmount] = useState("")
+  const [deliverableSaving, setDeliverableSaving] = useState(false)
+  const [deliverableMessage, setDeliverableMessage] = useState<string | null>(null)
+  const [deliverableError, setDeliverableError] = useState<string | null>(null)
 
   const isBeamAdmin = effectiveRoles.includes("beam-admin")
   const projectId = typeof params?.id === "string" ? params.id : ""
@@ -62,18 +85,34 @@ export default function AdminProjectDetailPage() {
   }, [authLoading, isBeamAdmin, projectId, router, user])
 
   const loadProject = async () => {
+    if (!user || !projectId) {
+      return
+    }
+
     try {
       setPageLoading(true)
       setError(null)
 
-      const snapshot = await getDoc(doc(getDb(), "projects", projectId))
-      if (!snapshot.exists()) {
-        throw new Error("Project not found.")
+      const token = await user.getIdToken()
+      const response = await fetch(`/api/projects?id=${encodeURIComponent(projectId)}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        cache: "no-store",
+      })
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            project?: BeamProject | null
+            error?: string
+          }
+        | null
+
+      if (!response.ok || !payload?.project) {
+        throw new Error(payload?.error || "Project not found.")
       }
 
-      setProject(
-        normalizeBeamProjectDocument(snapshot.id, snapshot.data() as Record<string, unknown>)
-      )
+      setProject(payload.project)
+      await loadDeliverables(payload.project.clientId)
     } catch (loadError) {
       console.error("Unable to load project:", loadError)
       setError(
@@ -82,6 +121,98 @@ export default function AdminProjectDetailPage() {
       setProject(null)
     } finally {
       setPageLoading(false)
+    }
+  }
+
+  const loadDeliverables = async (targetClientId = project?.clientId) => {
+    if (!user || !targetClientId) return
+
+    try {
+      setDeliverablesLoading(true)
+      setDeliverableError(null)
+      const token = await user.getIdToken()
+      const response = await fetch(`/api/deliverables?clientId=${encodeURIComponent(targetClientId)}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        cache: "no-store",
+      })
+      const payload = (await response.json()) as {
+        success?: boolean
+        deliverables?: ClientDeliverable[]
+        error?: string
+      }
+
+      if (!response.ok || payload.success !== true || !Array.isArray(payload.deliverables)) {
+        throw new Error(payload.error || "Unable to load deliverables.")
+      }
+
+      setDeliverables(payload.deliverables)
+    } catch (loadError) {
+      console.error("Unable to load deliverables:", loadError)
+      setDeliverableError(
+        loadError instanceof Error ? loadError.message : "Unable to load deliverables."
+      )
+    } finally {
+      setDeliverablesLoading(false)
+    }
+  }
+
+  const handleCreateDeliverable = async () => {
+    if (!user || !project) return
+
+    setDeliverableSaving(true)
+    setDeliverableError(null)
+    setDeliverableMessage(null)
+
+    try {
+      const token = await user.getIdToken()
+      const screenshotUrls = deliverableScreenshots
+        .split(/\r?\n/)
+        .map((url) => url.trim())
+        .filter(Boolean)
+      const response = await fetch("/api/deliverables", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          clientId: project.clientId,
+          projectId: project.id,
+          title: deliverableTitle,
+          description: deliverableDescription,
+          liveUrl: deliverableLiveUrl,
+          screenshotUrls,
+          screenRecordingUrl: deliverableRecordingUrl,
+          amount: Number(deliverableAmount),
+        }),
+      })
+      const payload = (await response.json()) as {
+        success?: boolean
+        deliverable?: ClientDeliverable
+        error?: string
+      }
+
+      if (!response.ok || payload.success !== true || !payload.deliverable) {
+        throw new Error(payload.error || "Unable to create deliverable.")
+      }
+
+      setDeliverables((current) => [payload.deliverable as ClientDeliverable, ...current])
+      setDeliverableTitle("")
+      setDeliverableDescription("")
+      setDeliverableLiveUrl("")
+      setDeliverableScreenshots("")
+      setDeliverableRecordingUrl("")
+      setDeliverableAmount("")
+      setDeliverableMessage("Deliverable created and available in the client portal.")
+    } catch (createError) {
+      console.error("Unable to create deliverable:", createError)
+      setDeliverableError(
+        createError instanceof Error ? createError.message : "Unable to create deliverable."
+      )
+    } finally {
+      setDeliverableSaving(false)
     }
   }
 
@@ -197,6 +328,14 @@ export default function AdminProjectDetailPage() {
                       : "Pending server timestamp"
                   }
                 />
+                <FieldRow
+                  label="Attached repository"
+                  value={project.repository?.fullName || "Not attached"}
+                />
+                <FieldRow
+                  label="Deployment URL"
+                  value={project.repository?.deploymentUrl || "Not attached"}
+                />
               </div>
             </CardContent>
           </Card>
@@ -232,28 +371,161 @@ export default function AdminProjectDetailPage() {
 
             <Card className="border border-border/70 bg-white/90">
               <CardHeader>
-                <CardTitle>Deliverables and expansion</CardTitle>
+                <CardTitle>Client deliverables</CardTitle>
                 <CardDescription>
-                  This record starts with empty deliverables and an empty expansion plan.
+                  Create reviewable payment cards for the client portal.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="rounded-[20px] border border-border/70 bg-muted/35 p-4">
-                  <p className="text-sm font-semibold text-slate-900">Deliverables</p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    {project.deliverables.length > 0
-                      ? project.deliverables.join(", ")
-                      : "No deliverables attached yet."}
-                  </p>
+                {deliverableMessage ? (
+                  <div className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                    {deliverableMessage}
+                  </div>
+                ) : null}
+
+                {deliverableError ? (
+                  <div className="rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                    {deliverableError}
+                  </div>
+                ) : null}
+
+                <div className="grid gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-slate-700">Title</label>
+                    <Input
+                      value={deliverableTitle}
+                      onChange={(event) => setDeliverableTitle(event.target.value)}
+                      placeholder="Weekly sprint 1"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-slate-700">
+                      Two-sentence summary
+                    </label>
+                    <Textarea
+                      rows={4}
+                      value={deliverableDescription}
+                      onChange={(event) => setDeliverableDescription(event.target.value)}
+                      placeholder="Summarize what changed and what the client should review."
+                    />
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-sm font-semibold text-slate-700">Live URL</label>
+                      <Input
+                        value={deliverableLiveUrl}
+                        onChange={(event) => setDeliverableLiveUrl(event.target.value)}
+                        placeholder="https://project.vercel.app"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-semibold text-slate-700">Price</label>
+                      <Input
+                        inputMode="decimal"
+                        value={deliverableAmount}
+                        onChange={(event) => setDeliverableAmount(event.target.value)}
+                        placeholder="150"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-slate-700">
+                      Screenshot URLs
+                    </label>
+                    <Textarea
+                      rows={3}
+                      value={deliverableScreenshots}
+                      onChange={(event) => setDeliverableScreenshots(event.target.value)}
+                      placeholder="One image URL per line"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-slate-700">
+                      Screen recording URL
+                    </label>
+                    <Input
+                      value={deliverableRecordingUrl}
+                      onChange={(event) => setDeliverableRecordingUrl(event.target.value)}
+                      placeholder="https://www.loom.com/share/..."
+                    />
+                  </div>
+
+                  <Button onClick={handleCreateDeliverable} disabled={deliverableSaving}>
+                    {deliverableSaving ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Create deliverable
+                      </>
+                    )}
+                  </Button>
                 </div>
 
                 <div className="rounded-[20px] border border-border/70 bg-muted/35 p-4">
-                  <p className="text-sm font-semibold text-slate-900">Expansion plan</p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    {Object.keys(project.expansionPlan).length > 0
-                      ? "Expansion plan populated."
-                      : "Expansion plan is empty."}
-                  </p>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-slate-900">Current cards</p>
+                    <Badge variant="secondary">{deliverables.length}</Badge>
+                  </div>
+                  {deliverablesLoading ? (
+                    <div className="mt-3 flex items-center gap-2 text-sm text-slate-600">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading deliverables...
+                    </div>
+                  ) : deliverables.length > 0 ? (
+                    <div className="mt-3 space-y-3">
+                      {deliverables.map((deliverable) => (
+                        <div
+                          key={deliverable.id}
+                          className="rounded-[18px] border border-border/70 bg-white/80 p-4"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-slate-950">{deliverable.title}</p>
+                              <p className="mt-1 text-sm text-slate-600">
+                                {formatCurrency(deliverable.amount)}
+                              </p>
+                            </div>
+                            <Badge variant={deliverable.status === "paid" ? "success" : "warning"}>
+                              {deliverable.status}
+                            </Badge>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {deliverable.liveUrl ? (
+                              <Button asChild variant="outline" size="sm">
+                                <a href={deliverable.liveUrl} rel="noreferrer" target="_blank">
+                                  <ExternalLink className="mr-2 h-4 w-4" />
+                                  Live
+                                </a>
+                              </Button>
+                            ) : null}
+                            {deliverable.screenshotUrls.length > 0 ? (
+                              <Badge>
+                                <ImageIcon className="mr-2 h-3 w-3" />
+                                {deliverable.screenshotUrls.length} screenshots
+                              </Badge>
+                            ) : null}
+                            <Badge>
+                              <CreditCard className="mr-2 h-3 w-3" />
+                              Portal checkout
+                            </Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-600">
+                      No deliverable payment cards have been created yet.
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>

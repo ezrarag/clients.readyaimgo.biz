@@ -58,7 +58,20 @@ export interface BeamProject {
   expansionPlan: Record<string, never>
   sourceBusiness: string
   beamBookEntry: boolean
+  repository: BeamProjectRepository | null
   createdAt?: Date | string | null
+}
+
+export interface BeamProjectRepository {
+  provider: "github"
+  owner: string
+  name: string
+  fullName: string
+  url: string
+  deploymentUrl: string | null
+  attachedByUid: string | null
+  attachedByEmail: string | null
+  attachedAt?: Date | string | null
 }
 
 export interface BeamUserOption {
@@ -319,6 +332,41 @@ export function normalizeBeamProjectDocument(
   id: string,
   value: Record<string, unknown>
 ): BeamProject {
+  const rawRepository =
+    typeof value.repository === "object" && value.repository !== null
+      ? (value.repository as Record<string, unknown>)
+      : null
+  const repository =
+    rawRepository &&
+    typeof rawRepository.owner === "string" &&
+    typeof rawRepository.name === "string" &&
+    typeof rawRepository.fullName === "string" &&
+    typeof rawRepository.url === "string"
+      ? {
+          provider: "github" as const,
+          owner: rawRepository.owner.trim(),
+          name: rawRepository.name.trim(),
+          fullName: rawRepository.fullName.trim(),
+          url: rawRepository.url.trim(),
+          deploymentUrl:
+            typeof rawRepository.deploymentUrl === "string" &&
+            rawRepository.deploymentUrl.trim()
+              ? rawRepository.deploymentUrl.trim()
+              : null,
+          attachedByUid:
+            typeof rawRepository.attachedByUid === "string" &&
+            rawRepository.attachedByUid.trim()
+              ? rawRepository.attachedByUid.trim()
+              : null,
+          attachedByEmail:
+            typeof rawRepository.attachedByEmail === "string" &&
+            rawRepository.attachedByEmail.trim()
+              ? rawRepository.attachedByEmail.trim()
+              : null,
+          attachedAt: readTimestamp(rawRepository.attachedAt),
+        }
+      : null
+
   return {
     id,
     clientName: typeof value.clientName === "string" ? value.clientName : "",
@@ -345,6 +393,7 @@ export function normalizeBeamProjectDocument(
         ? value.sourceBusiness.trim()
         : "readyaimgo",
     beamBookEntry: Boolean(value.beamBookEntry),
+    repository,
     createdAt: serializeTimestamp(value.createdAt),
   }
 }

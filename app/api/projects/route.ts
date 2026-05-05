@@ -127,20 +127,35 @@ export async function GET(request: NextRequest) {
   try {
     const context = await getAuthenticatedBeamUser(request)
     const url = new URL(request.url)
+    const requestedProjectId = url.searchParams.get("id")?.trim() || ""
     const viewAsParticipant =
       url.searchParams.get("viewAs") === "participant" &&
       context.roles.includes("beam-admin")
 
     const viewerRoles = viewAsParticipant ? (["participant"] as BeamRole[]) : context.roles
-    const projectsSnapshot = await context.db
-      .collection("projects")
-      .orderBy("createdAt", "desc")
-      .get()
-
-    const projects = projectsSnapshot.docs
-      .map((snapshot) =>
-        normalizeBeamProjectDocument(snapshot.id, snapshot.data() as Record<string, unknown>)
-      )
+    const projectsSnapshot = requestedProjectId
+      ? await context.db.collection("projects").doc(requestedProjectId).get()
+      : await context.db
+          .collection("projects")
+          .orderBy("createdAt", "desc")
+          .get()
+    const projects = (
+      "docs" in projectsSnapshot
+        ? projectsSnapshot.docs.map((snapshot) =>
+            normalizeBeamProjectDocument(
+              snapshot.id,
+              snapshot.data() as Record<string, unknown>
+            )
+          )
+        : projectsSnapshot.exists
+          ? [
+              normalizeBeamProjectDocument(
+                projectsSnapshot.id,
+                projectsSnapshot.data() as Record<string, unknown>
+              ),
+            ]
+          : []
+    )
       .filter((project) =>
         canViewProject({
           project,
@@ -167,6 +182,12 @@ export async function GET(request: NextRequest) {
       hasAnyRole(option.roles, ["rag-lead", "beam-admin"])
     )
 
+    const project = requestedProjectId ? projects[0] ?? null : null
+
+    if (requestedProjectId && !project) {
+      return NextResponse.json({ error: "Project not found." }, { status: 404 })
+    }
+
     return NextResponse.json({
       permissions: {
         canCreateProjects: hasAnyRole(context.roles, PROJECT_CREATOR_ROLES),
@@ -175,6 +196,7 @@ export async function GET(request: NextRequest) {
       },
       leadOptions,
       teamOptions,
+      project,
       projects,
       sourceNgo: context.sourceNgo,
     })
@@ -362,6 +384,7 @@ export async function POST(request: NextRequest) {
           expansionPlan: {},
           sourceBusiness,
           beamBookEntry,
+          repository: null,
           createdAt: new Date().toISOString(),
         } satisfies BeamProject,
       },

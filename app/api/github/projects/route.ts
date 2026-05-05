@@ -16,6 +16,7 @@ interface GitHubRepo {
 interface Project {
   id: number
   name: string
+  fullName: string
   description: string | null
   url: string
   homepage: string | null
@@ -28,7 +29,7 @@ interface Project {
 function buildGitHubReposUrl(account: string) {
   const params = new URLSearchParams({
     sort: "updated",
-    per_page: "20",
+    per_page: "100",
     type: "owner",
   })
 
@@ -93,6 +94,7 @@ export async function GET() {
         return {
           id: repo.id,
           name: repo.name,
+          fullName: repo.full_name,
           description: repo.description,
           url: repo.html_url,
           homepage: repo.homepage,

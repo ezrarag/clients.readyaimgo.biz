@@ -3,21 +3,18 @@
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import {
-  CheckCircle2,
-  CreditCard,
+  Building2,
+  FolderKanban,
+  Github,
   Loader2,
-  LockKeyhole,
   LogOut,
-  MessageSquare,
-  Server,
-  UnlockKeyhole,
-  Wallet,
+  RefreshCw,
+  Search,
 } from "lucide-react"
 
 import { useAuth } from "@/components/auth/AuthProvider"
 import { ProjectStatusBadge } from "@/components/admin/project-status-badge"
 import { RagNotesFeed } from "@/components/rag-notes-feed"
-import { ClientPagesPanel } from "@/components/client-pages-panel"
 import { AppShell } from "@/components/site/app-shell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -30,30 +27,27 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import { findClientPortalProjectByIdAndEmail } from "@/lib/client-portal"
 import { type BeamProject } from "@/lib/beam"
+import { loadClientPortalProject } from "@/lib/client-portal"
 import { signOut } from "@/lib/firebase/auth"
 import { getDb } from "@/lib/firebase/config"
-import {
-  computeValueProfileProgress,
-  uniqueStrings,
-  type ValueProfileResponse,
-} from "@/lib/value-profile"
+import { type Organization } from "@/lib/organizations"
 
 type FeedbackCategory = "design" | "content" | "functionality" | "other"
 type FeedbackUrgency = "low" | "medium" | "high"
 
-const currencyFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 2,
-})
-
-function formatCurrency(value: number) {
-  return currencyFormatter.format(value)
+type GitHubProject = {
+  id: number
+  name: string
+  fullName: string
+  description: string | null
+  url: string
+  homepage: string | null
+  language: string | null
+  stars: number
+  updatedAt: string
+  deploymentUrl: string | null
 }
 
 export default function ClientPortalPage() {
@@ -62,88 +56,192 @@ export default function ClientPortalPage() {
   const { user, loading: authLoading } = useAuth()
 
   const [project, setProject] = useState<BeamProject | null>(null)
-  const [valueData, setValueData] = useState<ValueProfileResponse | null>(null)
+  const [availableProjects, setAvailableProjects] = useState<BeamProject[]>([])
+  const [availableRepos, setAvailableRepos] = useState<GitHubProject[]>([])
+  const [availableOrganizations, setAvailableOrganizations] = useState<Organization[]>([])
   const [pageLoading, setPageLoading] = useState(true)
-  const [valueLoading, setValueLoading] = useState(false)
-  const [submitLoading, setSubmitLoading] = useState(false)
-  const [paymentLoading, setPaymentLoading] = useState(false)
-  const [submitMessage, setSubmitMessage] = useState<string | null>(null)
-  const [submitError, setSubmitError] = useState<string | null>(null)
-  const [valueError, setValueError] = useState<string | null>(null)
-  const [paymentError, setPaymentError] = useState<string | null>(null)
-  const [paymentAmount, setPaymentAmount] = useState("")
+  const [associationLoading, setAssociationLoading] = useState(false)
+  const [pageError, setPageError] = useState<string | null>(null)
+  const [associationError, setAssociationError] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState("")
   const [summary, setSummary] = useState("")
   const [category, setCategory] = useState<FeedbackCategory>("design")
   const [urgency, setUrgency] = useState<FeedbackUrgency>("medium")
+  const [submitLoading, setSubmitLoading] = useState(false)
+  const [submitMessage, setSubmitMessage] = useState<string | null>(null)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [repositoryUrl, setRepositoryUrl] = useState("")
+  const [deploymentUrl, setDeploymentUrl] = useState("")
+  const [repositorySaving, setRepositorySaving] = useState(false)
+  const [repositoryMessage, setRepositoryMessage] = useState<string | null>(null)
+  const [repositoryError, setRepositoryError] = useState<string | null>(null)
+  const [requestProjectName, setRequestProjectName] = useState("")
+  const [requestWebsiteUrl, setRequestWebsiteUrl] = useState("")
+  const [requestOrganizationName, setRequestOrganizationName] = useState("")
+  const [requestRepositoryUrl, setRequestRepositoryUrl] = useState("")
+  const [requestNotes, setRequestNotes] = useState("")
+  const [requestSaving, setRequestSaving] = useState(false)
+  const [requestMessage, setRequestMessage] = useState<string | null>(null)
+  const [requestError, setRequestError] = useState<string | null>(null)
 
   const clientId = typeof params?.clientId === "string" ? params.clientId : ""
+  const normalizedSearch = searchQuery.trim().toLowerCase()
 
-  useEffect(() => {
-    if (authLoading) return
-    if (!user) { router.push("/login"); return }
-    if (!clientId) { router.replace("/dashboard"); return }
+  const matchingProjects =
+    normalizedSearch.length > 0
+      ? availableProjects.filter((candidate) =>
+          [candidate.clientName, candidate.clientId, candidate.sourceNgo]
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedSearch)
+        )
+      : availableProjects
 
-    let cancelled = false
+  const matchingRepos =
+    normalizedSearch.length > 0
+      ? availableRepos.filter((repo) =>
+          [
+            repo.name,
+            repo.fullName,
+            repo.description || "",
+            repo.url,
+            repo.homepage || "",
+            repo.deploymentUrl || "",
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedSearch)
+        )
+      : availableRepos.slice(0, 12)
 
-    const loadPortal = async () => {
-      try {
-        const portalProject = await findClientPortalProjectByIdAndEmail({
-          firestoreDb: getDb(),
-          clientId,
-          email: user.email,
-        })
+  const matchingOrganizations =
+    normalizedSearch.length > 0
+      ? availableOrganizations.filter((org) =>
+          [org.name, org.slug, org.website || ""]
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedSearch)
+        )
+      : availableOrganizations.slice(0, 12)
 
-        if (!portalProject) { router.replace("/dashboard"); return }
-        if (!cancelled) setProject(portalProject)
-      } catch (error) {
-        console.error("Unable to load client portal:", error)
-        if (!cancelled) router.replace("/dashboard")
-      } finally {
-        if (!cancelled) setPageLoading(false)
-      }
+  const loadAssociationOptions = async () => {
+    if (!user) {
+      return
     }
 
-    void loadPortal()
-    return () => { cancelled = true }
-  }, [authLoading, clientId, router, user])
+    setAssociationLoading(true)
+    setAssociationError(null)
 
-  useEffect(() => {
-    if (!project || !user || !clientId) return
-
-    let cancelled = false
-
-    const loadValueProfile = async () => {
-      setValueLoading(true)
-      setValueError(null)
-
-      try {
-        const token = await user.getIdToken()
-        const response = await fetch(`/api/value-profile/${encodeURIComponent(clientId)}`, {
+    try {
+      const token = await user.getIdToken()
+      const [projectsResponse, organizationsResponse, reposResponse] = await Promise.all([
+        fetch("/api/client-portal/projects", {
           headers: {
             Authorization: `Bearer ${token}`,
           },
           cache: "no-store",
-        })
-        const payload = (await response.json()) as ValueProfileResponse | { error?: string }
+        }),
+        fetch("/api/client-portal/organizations", {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          cache: "no-store",
+        }),
+        fetch("/api/github/projects", {
+          cache: "no-store",
+        }),
+      ])
 
-        if (!response.ok || !("success" in payload) || payload.success !== true) {
-          throw new Error("error" in payload && payload.error ? payload.error : "Unable to load value profile.")
-        }
+      const [projectsPayload, organizationsPayload, reposPayload] = await Promise.all([
+        projectsResponse.json().catch(() => null),
+        organizationsResponse.json().catch(() => null),
+        reposResponse.json().catch(() => null),
+      ])
 
-        if (!cancelled) setValueData(payload)
-      } catch (error) {
-        console.error("Unable to load value profile:", error)
-        if (!cancelled) {
-          setValueError(error instanceof Error ? error.message : "Unable to load value profile.")
-        }
-      } finally {
-        if (!cancelled) setValueLoading(false)
+      if (!projectsResponse.ok || !Array.isArray(projectsPayload?.projects)) {
+        throw new Error(projectsPayload?.error || "Unable to load existing client projects.")
       }
+
+      if (
+        !organizationsResponse.ok ||
+        !Array.isArray(organizationsPayload?.organizations)
+      ) {
+        throw new Error(
+          organizationsPayload?.error || "Unable to load organization matches."
+        )
+      }
+
+      if (!reposResponse.ok || !Array.isArray(reposPayload?.projects)) {
+        throw new Error(reposPayload?.error || "Unable to load repository matches.")
+      }
+
+      setAvailableProjects(projectsPayload.projects as BeamProject[])
+      setAvailableOrganizations(organizationsPayload.organizations as Organization[])
+      setAvailableRepos(reposPayload.projects as GitHubProject[])
+    } catch (error) {
+      console.error("Unable to load association options:", error)
+      setAssociationError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load association options."
+      )
+    } finally {
+      setAssociationLoading(false)
+    }
+  }
+
+  const loadProject = async () => {
+    if (!user || !clientId) {
+      return
     }
 
-    void loadValueProfile()
-    return () => { cancelled = true }
-  }, [clientId, project, user])
+    try {
+      setPageLoading(true)
+      setPageError(null)
+
+      const nextProject = await loadClientPortalProject({
+        firestoreDb: getDb(),
+        clientId,
+        user,
+      })
+
+      if (!nextProject) {
+        router.replace("/dashboard")
+        return
+      }
+
+      setProject(nextProject)
+      setRepositoryUrl(nextProject.repository?.url || "")
+      setDeploymentUrl(nextProject.repository?.deploymentUrl || "")
+      setRequestOrganizationName(nextProject.clientName)
+    } catch (error) {
+      console.error("Unable to load client portal:", error)
+      setPageError(
+        error instanceof Error ? error.message : "Unable to load this client portal."
+      )
+    } finally {
+      setPageLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (authLoading) {
+      return
+    }
+
+    if (!user) {
+      router.push("/login")
+      return
+    }
+
+    if (!clientId) {
+      router.replace("/dashboard")
+      return
+    }
+
+    void loadProject()
+    void loadAssociationOptions()
+  }, [authLoading, clientId, router, user])
 
   const handleSignOut = async () => {
     await signOut()
@@ -163,9 +261,11 @@ export default function ClientPortalPage() {
     try {
       const response = await fetch("/api/feedback", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          projectId: project.clientId,
+          projectId: project.id,
           clientEmail: user.email,
           clientName: user.displayName || user.email,
           summary: summary.trim(),
@@ -173,9 +273,16 @@ export default function ClientPortalPage() {
           urgency,
         }),
       })
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            success?: boolean
+            error?: string
+          }
+        | null
 
-      const payload = await response.json()
-      if (!response.ok) throw new Error(payload.error || "Unable to submit feedback.")
+      if (!response.ok || payload?.success !== true) {
+        throw new Error(payload?.error || "Unable to submit feedback.")
+      }
 
       setSummary("")
       setCategory("design")
@@ -183,48 +290,121 @@ export default function ClientPortalPage() {
       setSubmitMessage("Feedback sent to the Readyaimgo team.")
     } catch (error) {
       console.error("Unable to submit feedback:", error)
-      setSubmitError(error instanceof Error ? error.message : "Unable to submit feedback.")
+      setSubmitError(
+        error instanceof Error ? error.message : "Unable to submit feedback."
+      )
     } finally {
       setSubmitLoading(false)
     }
   }
 
-  const handleStartPayment = async () => {
-    if (!user || !clientId) return
-
-    const amount = Number(paymentAmount)
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setPaymentError("Enter a payment amount.")
+  const attachRepository = async (nextRepositoryUrl: string, nextDeploymentUrl?: string | null) => {
+    if (!project || !user) {
       return
     }
 
-    setPaymentLoading(true)
-    setPaymentError(null)
+    setRepositorySaving(true)
+    setRepositoryError(null)
+    setRepositoryMessage(null)
 
     try {
       const token = await user.getIdToken()
-      const response = await fetch("/api/stripe/value-payment", {
+      const response = await fetch("/api/client-portal/repository", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          projectId: project.id,
+          repositoryUrl: nextRepositoryUrl.trim(),
+          deploymentUrl: (nextDeploymentUrl || "").trim(),
+        }),
+      })
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            success?: boolean
+            project?: BeamProject
+            error?: string
+          }
+        | null
+
+      if (!response.ok || payload?.success !== true || !payload.project) {
+        throw new Error(payload?.error || "Unable to attach repository.")
+      }
+
+      setProject(payload.project)
+      setRepositoryUrl(payload.project.repository?.url || nextRepositoryUrl.trim())
+      setDeploymentUrl(
+        payload.project.repository?.deploymentUrl || (nextDeploymentUrl || "").trim()
+      )
+      setRepositoryMessage("Repository attached to this project.")
+    } catch (error) {
+      console.error("Unable to attach repository:", error)
+      setRepositoryError(
+        error instanceof Error ? error.message : "Unable to attach repository."
+      )
+    } finally {
+      setRepositorySaving(false)
+    }
+  }
+
+  const handleManualAttachRepository = async () => {
+    await attachRepository(repositoryUrl, deploymentUrl)
+  }
+
+  const handleSubmitProjectRequest = async () => {
+    if (!project || !user) {
+      return
+    }
+
+    setRequestSaving(true)
+    setRequestError(null)
+    setRequestMessage(null)
+
+    try {
+      const token = await user.getIdToken()
+      const response = await fetch("/api/client-portal/project-request", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          clientId,
-          amount,
+          projectName: requestProjectName.trim(),
+          websiteUrl: requestWebsiteUrl.trim(),
+          organizationName: requestOrganizationName.trim(),
+          repositoryUrl: requestRepositoryUrl.trim(),
+          notes: requestNotes.trim(),
+          currentPortalProjectId: project.id,
+          currentPortalClientId: project.clientId,
         }),
       })
-      const payload = (await response.json()) as { url?: string; error?: string }
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            success?: boolean
+            error?: string
+          }
+        | null
 
-      if (!response.ok || !payload.url) {
-        throw new Error(payload.error || "Unable to start payment.")
+      if (!response.ok || payload?.success !== true) {
+        throw new Error(payload?.error || "Unable to submit project request.")
       }
 
-      window.location.assign(payload.url)
+      setRequestProjectName("")
+      setRequestWebsiteUrl("")
+      setRequestRepositoryUrl("")
+      setRequestNotes("")
+      setRequestMessage(
+        "Project request submitted. This gives the team the information needed to start the GitHub/Codex workflow."
+      )
     } catch (error) {
-      console.error("Unable to start payment:", error)
-      setPaymentError(error instanceof Error ? error.message : "Unable to start payment.")
-      setPaymentLoading(false)
+      console.error("Unable to submit project request:", error)
+      setRequestError(
+        error instanceof Error ? error.message : "Unable to submit project request."
+      )
+    } finally {
+      setRequestSaving(false)
     }
   }
 
@@ -236,401 +416,527 @@ export default function ClientPortalPage() {
     )
   }
 
-  if (!user || !project) return null
-
-  const valueProgress = valueData ? computeValueProfileProgress(valueData.profile) : null
-  const allDeliverables = uniqueStrings([
-    ...project.deliverables,
-    ...(valueData?.profile.thresholds.flatMap((threshold) => threshold.deliverables) ?? []),
-  ])
-  const unlockedSet = new Set(valueProgress?.unlockedDeliverables ?? [])
-  const unlockedDeliverables = allDeliverables.filter((deliverable) => unlockedSet.has(deliverable))
-  const lockedDeliverables = allDeliverables.filter((deliverable) => !unlockedSet.has(deliverable))
-  const currentTier = valueProgress?.currentThreshold?.label ?? "Baseline"
+  if (!user || !project) {
+    return null
+  }
 
   return (
     <AppShell
       title={project.clientName}
-      description="Client portal view for project updates, deliverables, and direct feedback."
+      description="Review the current project scope, search for matching workspaces or repositories, and send feedback from one client-facing portal."
       eyebrow="Client portal"
-      nav={[{ href: `/portal/${project.clientId}`, label: "Portal", active: true }]}
+      nav={[
+        { href: `/portal/${project.clientId}`, label: "Portal", active: true },
+      ]}
       actions={
         <>
-          <Badge variant="secondary">{user.email}</Badge>
+          <Button
+            variant="outline"
+            onClick={() => {
+              void loadProject()
+              void loadAssociationOptions()
+            }}
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Refresh
+          </Button>
           <Button variant="outline" onClick={handleSignOut}>
             <LogOut className="mr-2 h-4 w-4" />
-            Sign Out
+            Sign out
           </Button>
         </>
       }
       intro={
         <div className="rounded-[28px] border border-white/75 bg-white/80 p-5 shadow-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
-            Project state
-          </p>
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <ProjectStatusBadge status={project.status} />
             <Badge variant="accent">{project.sourceNgo}</Badge>
+            {project.beamBookEntry ? <Badge>Forge portal</Badge> : null}
+            {project.repository ? <Badge variant="secondary">{project.repository.fullName}</Badge> : null}
           </div>
         </div>
       }
     >
-      <div className="space-y-6">
-        {valueError ? (
-          <div className="rounded-[24px] border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700">
-            {valueError}
-          </div>
-        ) : null}
+      <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+        <div className="space-y-6">
+          <Card className="border border-border/70 bg-white/90">
+            <CardHeader>
+              <CardTitle>Project snapshot</CardTitle>
+              <CardDescription>
+                Your current deliverables and project record.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {pageError ? (
+                <div className="rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  {pageError}
+                </div>
+              ) : null}
 
-        <Tabs defaultValue="infrastructure" className="space-y-5">
-          <TabsList className="grid w-full grid-cols-3 rounded-[26px]">
-            <TabsTrigger value="infrastructure" className="gap-2">
-              <Server className="h-4 w-4" />
-              Infrastructure
-            </TabsTrigger>
-            <TabsTrigger value="investment" className="gap-2">
-              <Wallet className="h-4 w-4" />
-              Investment
-            </TabsTrigger>
-            <TabsTrigger value="deliverables" className="gap-2">
-              <UnlockKeyhole className="h-4 w-4" />
-              Deliverables
-            </TabsTrigger>
-          </TabsList>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="rounded-[20px] border border-border/70 bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                    Client ID
+                  </p>
+                  <p className="mt-2 text-sm text-slate-900">{project.clientId}</p>
+                </div>
+                <div className="rounded-[20px] border border-border/70 bg-white/80 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+                    Portal email
+                  </p>
+                  <p className="mt-2 text-sm text-slate-900">{project.clientPortalEmail}</p>
+                </div>
+              </div>
 
-          <TabsContent value="infrastructure" className="space-y-5">
-            <div className="grid gap-4 md:grid-cols-3">
-              <Card className="border border-border/70 bg-white/90">
-                <CardHeader>
-                  <CardDescription>Monthly infrastructure</CardDescription>
-                  <CardTitle>
-                    {formatCurrency(valueData?.infrastructureMonthlyTotal ?? 0)}
-                  </CardTitle>
-                </CardHeader>
-              </Card>
-              <Card className="border border-border/70 bg-white/90">
-                <CardHeader>
-                  <CardDescription>Attributed services</CardDescription>
-                  <CardTitle>{valueData?.infrastructureCosts.length ?? 0}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card className="border border-border/70 bg-white/90">
-                <CardHeader>
-                  <CardDescription>Current tier</CardDescription>
-                  <CardTitle>{currentTier}</CardTitle>
-                </CardHeader>
-              </Card>
-            </div>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Deliverables</p>
+                  <p className="text-sm text-slate-500">
+                    Current scope shared with the client portal.
+                  </p>
+                </div>
 
-            <Card className="border border-border/70 bg-white/90">
-              <CardHeader>
-                <CardTitle>Live Cost Breakdown</CardTitle>
-                <CardDescription>
-                  Infrastructure services currently attributed to this client.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {valueLoading ? (
-                  <div className="flex items-center gap-2 rounded-[24px] border border-dashed border-border/80 bg-muted/35 px-5 py-10 text-sm text-slate-600">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading costs...
-                  </div>
-                ) : valueData && valueData.infrastructureCosts.length > 0 ? (
+                {project.deliverables.length > 0 ? (
                   <div className="space-y-3">
-                    {valueData.infrastructureCosts.map((item) => (
-                      <div
-                        key={item.serviceId}
-                        className="grid gap-3 rounded-[20px] border border-border/70 bg-white/85 px-4 py-3 sm:grid-cols-[1fr_auto]"
+                    {project.deliverables.map((deliverable) => (
+                      <label
+                        key={deliverable}
+                        className="flex items-center justify-between gap-3 rounded-[20px] border border-border/70 bg-white/80 px-4 py-3"
                       >
-                        <div>
-                          <p className="font-semibold text-slate-950">{item.name}</p>
-                          <p className="text-sm text-slate-600">
-                            {item.vendor} · {item.category}
-                          </p>
-                        </div>
-                        <div className="sm:text-right">
-                          <p className="font-semibold text-slate-950">
-                            {formatCurrency(item.attributedMonthlyCost)}
-                          </p>
-                          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
-                            {item.attribution}
-                          </p>
-                        </div>
-                      </div>
+                        <span className="flex items-center gap-3 text-sm text-slate-800">
+                          <input
+                            checked={false}
+                            disabled
+                            readOnly
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          {deliverable}
+                        </span>
+                        <Badge variant="secondary">Pending</Badge>
+                      </label>
                     ))}
                   </div>
                 ) : (
-                  <div className="rounded-[24px] border border-dashed border-border/80 bg-muted/35 px-5 py-10 text-center text-sm text-slate-600">
-                    No infrastructure costs are attributed yet.
+                  <div className="rounded-[20px] border border-dashed border-border/80 bg-muted/35 px-4 py-5 text-sm text-slate-600">
+                    No deliverables have been published to this portal yet.
                   </div>
                 )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="investment" className="space-y-5">
-            <div className="grid gap-4 lg:grid-cols-[0.92fr_1.08fr]">
-              <Card className="border border-border/70 bg-white/90">
-                <CardHeader>
-                  <CardTitle>Investment</CardTitle>
-                  <CardDescription>Payment total and next unlock state.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                  <div className="rounded-[24px] border border-border/70 bg-white/85 p-5">
-                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
-                      Total paid
-                    </p>
-                    <p className="mt-2 text-4xl font-semibold text-slate-950">
-                      {formatCurrency(valueData?.profile.totalPaid ?? 0)}
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <Badge variant="accent">{currentTier}</Badge>
-                      {valueProgress?.nextThreshold ? (
-                        <Badge variant="warning">
-                          {formatCurrency(valueProgress.amountToNext)} to next
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary">All configured tiers open</Badge>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <label className="text-sm font-semibold text-slate-700">
-                      Payment amount
-                    </label>
-                    <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={paymentAmount}
-                        onChange={(event) => setPaymentAmount(event.target.value)}
-                        placeholder="Any amount"
-                      />
-                      <Button onClick={handleStartPayment} disabled={paymentLoading}>
-                        {paymentLoading ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Opening...
-                          </>
-                        ) : (
-                          <>
-                            <CreditCard className="mr-2 h-4 w-4" />
-                            Pay
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                    {paymentError ? (
-                      <p className="text-sm text-rose-600">{paymentError}</p>
-                    ) : null}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="border border-border/70 bg-white/90">
-                <CardHeader>
-                  <CardTitle>Next Threshold</CardTitle>
-                  <CardDescription>
-                    Deliverables preview for the next payment tier.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {valueProgress?.nextThreshold ? (
-                    <div className="space-y-4">
-                      <div className="rounded-[24px] border border-amber-200 bg-amber-50 px-5 py-4">
-                        <p className="text-sm font-semibold text-amber-900">
-                          {valueProgress.nextThreshold.label}
-                        </p>
-                        <p className="mt-1 text-2xl font-semibold text-amber-950">
-                          {formatCurrency(valueProgress.nextThreshold.amount)}
-                        </p>
-                      </div>
-                      <div className="space-y-2">
-                        {valueProgress.nextDeliverables.length > 0 ? (
-                          valueProgress.nextDeliverables.map((deliverable) => (
-                            <div
-                              key={deliverable}
-                              className="flex items-center gap-3 rounded-[18px] border border-border/70 bg-white/85 px-4 py-3 text-sm font-medium text-slate-800"
-                            >
-                              <LockKeyhole className="h-4 w-4 text-amber-500" />
-                              {deliverable}
-                            </div>
-                          ))
-                        ) : (
-                          <p className="rounded-[20px] border border-dashed border-border/80 bg-muted/35 px-4 py-6 text-sm text-slate-600">
-                            No deliverables attached to the next threshold.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-[24px] border border-emerald-200 bg-emerald-50 px-5 py-10 text-center text-sm text-emerald-700">
-                      All configured thresholds are unlocked.
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
-
-          <TabsContent value="deliverables" className="space-y-5">
-            <div className="grid gap-5 lg:grid-cols-2">
-              <Card className="border border-border/70 bg-white/90">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <UnlockKeyhole className="h-5 w-5 text-emerald-600" />
-                    Unlocked
-                  </CardTitle>
-                  <CardDescription>
-                    Available at the current payment tier.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {unlockedDeliverables.length > 0 ? (
-                    <div className="space-y-3">
-                      {unlockedDeliverables.map((deliverable) => (
-                        <div
-                          key={deliverable}
-                          className="flex items-center justify-between gap-4 rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3"
-                        >
-                          <span className="text-sm font-medium text-emerald-950">
-                            {deliverable}
-                          </span>
-                          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-[24px] border border-dashed border-border/80 bg-muted/35 px-5 py-10 text-center text-sm text-slate-600">
-                      No deliverables unlocked yet.
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="border border-border/70 bg-white/90">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <LockKeyhole className="h-5 w-5 text-amber-600" />
-                    Locked
-                  </CardTitle>
-                  <CardDescription>
-                    Opens as the payment tier advances.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {lockedDeliverables.length > 0 ? (
-                    <div className="space-y-3">
-                      {lockedDeliverables.map((deliverable) => (
-                        <div
-                          key={deliverable}
-                          className="flex items-center justify-between gap-4 rounded-[20px] border border-border/70 bg-white/80 px-4 py-3"
-                        >
-                          <span className="text-sm font-medium text-slate-900">
-                            {deliverable}
-                          </span>
-                          <Badge variant="warning">Locked</Badge>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-[24px] border border-dashed border-border/80 bg-muted/35 px-5 py-10 text-center text-sm text-slate-600">
-                      No locked deliverables remain.
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
-        </Tabs>
-
-        <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-          <div className="space-y-6">
-            <ClientPagesPanel clientId={clientId} />
-            <RagNotesFeed clientEmail={user.email ?? ""} />
-          </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <Card className="border border-border/70 bg-white/90">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <MessageSquare className="h-5 w-5 text-primary" />
-                Send feedback
-              </CardTitle>
+              <CardTitle>Search and associate</CardTitle>
               <CardDescription>
-                Share design, content, or functionality feedback directly with the project team.
+                Search for existing projects, GitHub repositories, and organizations before starting a new request.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              {associationError ? (
+                <div className="rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  {associationError}
+                </div>
+              ) : null}
+
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  className="pl-10"
+                  placeholder="Search by project, repository, website, or organization"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                />
+              </div>
+
+              {associationLoading ? (
+                <div className="flex items-center gap-2 rounded-[20px] border border-border/70 bg-muted/35 px-4 py-4 text-sm text-slate-600">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading project, repository, and organization matches...
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 xl:grid-cols-3">
+                <Card className="border border-border/70 bg-white/80 shadow-none">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <FolderKanban className="h-4 w-4" />
+                      Existing projects
+                    </CardTitle>
+                    <CardDescription>
+                      Projects already linked to this client email.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {matchingProjects.length > 0 ? (
+                      matchingProjects.map((candidate) => (
+                        <div
+                          key={candidate.id}
+                          className="rounded-[18px] border border-border/70 bg-white px-4 py-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {candidate.clientName}
+                              </p>
+                              <p className="text-xs text-slate-500">{candidate.clientId}</p>
+                            </div>
+                            {candidate.clientId === project.clientId ? (
+                              <Badge variant="secondary">Current</Badge>
+                            ) : null}
+                          </div>
+                          <div className="mt-3 flex items-center justify-between gap-3">
+                            <ProjectStatusBadge status={candidate.status} />
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => router.push(`/portal/${candidate.clientId}`)}
+                            >
+                              Open
+                            </Button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-[18px] border border-dashed border-border/80 bg-muted/35 px-4 py-4 text-sm text-slate-600">
+                        No matching client projects found.
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="border border-border/70 bg-white/80 shadow-none">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Github className="h-4 w-4" />
+                      Repository matches
+                    </CardTitle>
+                    <CardDescription>
+                      Attach one to the current project or use it in a new project request.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {matchingRepos.length > 0 ? (
+                      matchingRepos.slice(0, 12).map((repo) => (
+                        <div
+                          key={repo.id}
+                          className="rounded-[18px] border border-border/70 bg-white px-4 py-3"
+                        >
+                          <p className="text-sm font-semibold text-slate-900">{repo.fullName}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {repo.description || repo.deploymentUrl || repo.url}
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => void attachRepository(repo.url, repo.deploymentUrl)}
+                              disabled={repositorySaving}
+                            >
+                              Attach current
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setRequestRepositoryUrl(repo.url)
+                                setRequestProjectName((current) => current || repo.name)
+                                setRequestWebsiteUrl(
+                                  (current) => current || repo.deploymentUrl || repo.homepage || ""
+                                )
+                              }}
+                            >
+                              Use in request
+                            </Button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-[18px] border border-dashed border-border/80 bg-muted/35 px-4 py-4 text-sm text-slate-600">
+                        No matching repositories found.
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="border border-border/70 bg-white/80 shadow-none">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Building2 className="h-4 w-4" />
+                      Organization matches
+                    </CardTitle>
+                    <CardDescription>
+                      Pick the organization name you want the new project associated with.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {matchingOrganizations.length > 0 ? (
+                      matchingOrganizations.slice(0, 12).map((org) => (
+                        <div
+                          key={org.id}
+                          className="rounded-[18px] border border-border/70 bg-white px-4 py-3"
+                        >
+                          <p className="text-sm font-semibold text-slate-900">{org.name}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {org.slug}
+                            {org.website ? ` · ${org.website}` : ""}
+                          </p>
+                          <div className="mt-3">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setRequestOrganizationName(org.name)}
+                            >
+                              Use org
+                            </Button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-[18px] border border-dashed border-border/80 bg-muted/35 px-4 py-4 text-sm text-slate-600">
+                        No matching organizations found.
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {project.repository ? (
+                <div className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
+                  <div className="flex items-center gap-2 font-semibold">
+                    <Github className="h-4 w-4" />
+                    {project.repository.fullName}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-3 text-sm">
+                    <a
+                      href={project.repository.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline underline-offset-4"
+                    >
+                      Open repository
+                    </a>
+                    {project.repository.deploymentUrl ? (
+                      <a
+                        href={project.repository.deploymentUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline underline-offset-4"
+                      >
+                        Open deployment
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {repositoryMessage ? (
+                <div className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                  {repositoryMessage}
+                </div>
+              ) : null}
+
+              {repositoryError ? (
+                <div className="rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                  {repositoryError}
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-slate-700">
+                    Custom repository URL
+                  </label>
+                  <Input
+                    placeholder="https://github.com/owner/repository"
+                    value={repositoryUrl}
+                    onChange={(event) => setRepositoryUrl(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-slate-700">
+                    Deployment URL
+                  </label>
+                  <Input
+                    placeholder="https://project.vercel.app"
+                    value={deploymentUrl}
+                    onChange={(event) => setDeploymentUrl(event.target.value)}
+                  />
+                </div>
+                <Button onClick={() => void handleManualAttachRepository()} disabled={repositorySaving}>
+                  {repositorySaving ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Github className="mr-2 h-4 w-4" />
+                      Attach
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border border-border/70 bg-white/90">
+            <CardHeader>
+              <CardTitle>Start a new project request</CardTitle>
+              <CardDescription>
+                If the project is not already started, send a structured request that captures the repo, site, organization, and GitHub/Codex handoff context.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {submitMessage ? (
+              {requestMessage ? (
                 <div className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                  {submitMessage}
+                  {requestMessage}
                 </div>
               ) : null}
 
-              {submitError ? (
+              {requestError ? (
                 <div className="rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                  {submitError}
+                  {requestError}
                 </div>
               ) : null}
 
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-700">Summary</label>
-                <Textarea
-                  rows={6}
-                  value={summary}
-                  onChange={(event) => setSummary(event.target.value)}
-                  placeholder="Tell the team what you want changed or reviewed."
-                />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-slate-700">Project name</label>
+                  <Input
+                    value={requestProjectName}
+                    onChange={(event) => setRequestProjectName(event.target.value)}
+                    placeholder="Home Permit Dashboard"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-slate-700">Website or app URL</label>
+                  <Input
+                    value={requestWebsiteUrl}
+                    onChange={(event) => setRequestWebsiteUrl(event.target.value)}
+                    placeholder="https://example.com"
+                  />
+                </div>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-slate-700">Category</label>
-                  <Select
-                    value={category}
-                    onValueChange={(value) => setCategory(value as FeedbackCategory)}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="design">Design</SelectItem>
-                      <SelectItem value="content">Content</SelectItem>
-                      <SelectItem value="functionality">Functionality</SelectItem>
-                      <SelectItem value="other">Other</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <label className="text-sm font-semibold text-slate-700">Organization</label>
+                  <Input
+                    value={requestOrganizationName}
+                    onChange={(event) => setRequestOrganizationName(event.target.value)}
+                    placeholder="MKE Black"
+                  />
                 </div>
-
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-slate-700">Urgency</label>
-                  <Select
-                    value={urgency}
-                    onValueChange={(value) => setUrgency(value as FeedbackUrgency)}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <label className="text-sm font-semibold text-slate-700">Repository URL</label>
+                  <Input
+                    value={requestRepositoryUrl}
+                    onChange={(event) => setRequestRepositoryUrl(event.target.value)}
+                    placeholder="https://github.com/owner/repository"
+                  />
                 </div>
               </div>
 
-              <Button onClick={handleSubmitFeedback} disabled={submitLoading}>
-                {submitLoading ? (
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-700">Notes</label>
+                <Textarea
+                  value={requestNotes}
+                  onChange={(event) => setRequestNotes(event.target.value)}
+                  placeholder="Describe the app, website, repo, and what should happen next in the GitHub/Codex workflow."
+                  rows={5}
+                />
+              </div>
+
+              <Button onClick={() => void handleSubmitProjectRequest()} disabled={requestSaving}>
+                {requestSaving ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Sending feedback...
+                    Submitting request...
                   </>
                 ) : (
-                  "Submit feedback"
+                  "Submit project request"
                 )}
               </Button>
             </CardContent>
           </Card>
+
+          <RagNotesFeed clientEmail={user.email ?? ""} />
         </div>
+
+        <Card className="border border-border/70 bg-white/90">
+          <CardHeader>
+            <CardTitle>Send feedback</CardTitle>
+            <CardDescription>
+              Share design, content, or functionality notes with the Readyaimgo team.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {submitMessage ? (
+              <div className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                {submitMessage}
+              </div>
+            ) : null}
+
+            {submitError ? (
+              <div className="rounded-[20px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {submitError}
+              </div>
+            ) : null}
+
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-slate-700">Summary</label>
+              <Textarea
+                value={summary}
+                onChange={(event) => setSummary(event.target.value)}
+                placeholder="What should change or what should the team review next?"
+                rows={7}
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-700">Category</label>
+                <Select value={category} onValueChange={(value) => setCategory(value as FeedbackCategory)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="design">Design</SelectItem>
+                    <SelectItem value="content">Content</SelectItem>
+                    <SelectItem value="functionality">Functionality</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-700">Urgency</label>
+                <Select value={urgency} onValueChange={(value) => setUrgency(value as FeedbackUrgency)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <Button onClick={handleSubmitFeedback} disabled={submitLoading}>
+              {submitLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Sending feedback...
+                </>
+              ) : (
+                "Send feedback"
+              )}
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     </AppShell>
   )

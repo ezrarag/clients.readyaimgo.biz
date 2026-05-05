@@ -5,7 +5,6 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { format } from "date-fns"
 import { ArrowRight, Loader2, LogOut, RefreshCw } from "lucide-react"
-import { collection, getDocs, orderBy, query } from "firebase/firestore"
 
 import { useAuth } from "@/components/auth/AuthProvider"
 import { ProjectCreateForm } from "@/components/admin/project-create-form"
@@ -14,9 +13,8 @@ import { AppShell } from "@/components/site/app-shell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { normalizeBeamProjectDocument, type BeamProject } from "@/lib/beam"
+import { type BeamProject } from "@/lib/beam"
 import { signOut } from "@/lib/firebase/auth"
-import { getDb } from "@/lib/firebase/config"
 
 export default function AdminProjectsPage() {
   const { user, effectiveRoles, loading: authLoading } = useAuth()
@@ -46,23 +44,33 @@ export default function AdminProjectsPage() {
   }, [authLoading, isBeamAdmin, router, user])
 
   const loadProjects = async () => {
+    if (!user) {
+      return
+    }
+
     try {
       setPageLoading(true)
       setError(null)
 
-      const firestoreDb = getDb()
-      const snapshot = await getDocs(
-        query(collection(firestoreDb, "projects"), orderBy("createdAt", "desc"))
-      )
+      const token = await user.getIdToken()
+      const response = await fetch("/api/projects", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        cache: "no-store",
+      })
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            projects?: BeamProject[]
+            error?: string
+          }
+        | null
 
-      setProjects(
-        snapshot.docs.map((projectDoc) =>
-          normalizeBeamProjectDocument(
-            projectDoc.id,
-            projectDoc.data() as Record<string, unknown>
-          )
-        )
-      )
+      if (!response.ok || !payload || !Array.isArray(payload.projects)) {
+        throw new Error(payload?.error || "Unable to load projects.")
+      }
+
+      setProjects(payload.projects)
     } catch (loadError) {
       console.error("Unable to load projects:", loadError)
       setError(

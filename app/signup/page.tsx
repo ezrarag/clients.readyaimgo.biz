@@ -141,10 +141,7 @@ function SignUpPageContent() {
         let cancelled = false
 
         const redirectSignedInUser = async () => {
-          const destination = await resolveClientDestination(getDb(), user.email, {
-            uid: user.uid,
-            name: user.displayName,
-          })
+          const destination = await resolveClientDestination(getDb(), user.email, user)
           if (!cancelled) {
             router.push(destination)
           }
@@ -187,10 +184,7 @@ function SignUpPageContent() {
         })
 
         if (!cancelled) {
-          const destination = await resolveClientDestination(firestoreDb, user.email, {
-            uid: user.uid,
-            name: user.displayName,
-          })
+          const destination = await resolveClientDestination(firestoreDb, user.email, user)
           router.push(destination)
         }
       } catch (persistError) {
@@ -281,10 +275,11 @@ function SignUpPageContent() {
       const firestoreDb = getDb()
       await persistAccount(result.user)
       await notifySlack(result.user.email || email, name || companyName || "User")
-      const destination = await resolveClientDestination(firestoreDb, result.user.email, {
-        uid: result.user.uid,
-        name: result.user.displayName,
-      })
+      const destination = await resolveClientDestination(
+        firestoreDb,
+        result.user.email,
+        result.user
+      )
       router.push(destination)
     } catch (submitError) {
       setError(
@@ -316,10 +311,11 @@ function SignUpPageContent() {
         result.user.email || email,
         result.user.displayName || name || companyName || "User"
       )
-      const destination = await resolveClientDestination(firestoreDb, result.user.email, {
-        uid: result.user.uid,
-        name: result.user.displayName,
-      })
+      const destination = await resolveClientDestination(
+        firestoreDb,
+        result.user.email,
+        result.user
+      )
       router.push(destination)
     } catch (googleError) {
       setError(

@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react"
 import type { User } from "firebase/auth"
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore"
 import { Loader2, Plus } from "lucide-react"
 
 import type { ProjectSourceNgo, ProjectStatus } from "@/lib/beam"
@@ -22,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { getDb } from "@/lib/firebase/config"
 
 const PROJECT_STATUSES: ProjectStatus[] = ["scoping", "active", "review", "complete"]
 
@@ -94,33 +92,44 @@ export function ProjectCreateForm({
         throw new Error("clientPortalEmail is required.")
       }
 
-      const firestoreDb = getDb()
-      const projectRef = doc(firestoreDb, "projects", clientId)
-      const existingProject = await getDoc(projectRef)
-      if (existingProject.exists()) {
-        throw new Error(`A project with id ${clientId} already exists.`)
+      const token = await currentUser.getIdToken()
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          clientName: clientName.trim(),
+          clientId,
+          ragProjectLead: currentUser.uid,
+          beamParticipantLead: currentUser.uid,
+          sourceNgo,
+          ragRevenue: parseRevenue(ragRevenue, "ragRevenue"),
+          participantRevenueShare: parseRevenueShare(participantRevenueShare),
+          status,
+          clientPortalEmail: clientPortalEmail.trim().toLowerCase(),
+          beamBookEntry,
+          sourceBusiness: "readyaimgo",
+          cohort: [],
+          deliverables: [],
+          expansionPlan: {},
+        }),
+      })
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            success?: boolean
+            project?: { id?: string }
+            error?: string
+          }
+        | null
+
+      if (!response.ok || payload?.success !== true || !payload.project?.id) {
+        throw new Error(payload?.error || "Unable to create project.")
       }
 
-      await setDoc(projectRef, {
-        clientName: clientName.trim(),
-        clientId,
-        ragProjectLead: currentUser.uid,
-        beamParticipantLead: currentUser.uid,
-        sourceNgo,
-        ragRevenue: parseRevenue(ragRevenue, "ragRevenue"),
-        participantRevenueShare: parseRevenueShare(participantRevenueShare),
-        status,
-        clientPortalEmail: clientPortalEmail.trim().toLowerCase(),
-        beamBookEntry,
-        sourceBusiness: "readyaimgo",
-        cohort: [],
-        deliverables: [],
-        expansionPlan: {},
-        createdAt: serverTimestamp(),
-      })
-
       resetForm()
-      onCreated(clientId)
+      onCreated(payload.project.id)
     } catch (createError) {
       console.error("Unable to create project:", createError)
       setError(

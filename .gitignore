@@ -35,3 +35,4 @@ firebase-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.claude/

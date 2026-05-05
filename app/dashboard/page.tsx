@@ -108,10 +108,7 @@ function DashboardPageContent() {
     let cancelled = false
 
     const maybeRedirectToWorkspace = async () => {
-      const destination = await resolveClientDestination(getDb(), user.email, {
-        uid: user.uid,
-        name: user.displayName,
-      })
+      const destination = await resolveClientDestination(getDb(), user.email, user)
       if (!cancelled && destination !== "/dashboard") {
         router.replace(destination)
       }

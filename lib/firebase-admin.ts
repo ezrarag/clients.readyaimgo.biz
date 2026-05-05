@@ -9,14 +9,34 @@ import {
   normalizeBeamUserDocument,
 } from "@/lib/beam"
 
+function readAdminEnv(name: string) {
+  return process.env[name] || process.env[`NEXT_PUBLIC_${name}`]
+}
+
+function getAdminCredentials() {
+  const projectId = readAdminEnv("FIREBASE_PROJECT_ID")
+  const clientEmail = readAdminEnv("FIREBASE_CLIENT_EMAIL")
+  const privateKey = readAdminEnv("FIREBASE_PRIVATE_KEY")
+    ?.replace(/\\n/g, "\n")
+    .replace(/\\$/, "")
+
+  if (!projectId || !clientEmail || !privateKey) {
+    throw new Error("Firebase Admin credentials are not configured.")
+  }
+
+  return {
+    projectId,
+    clientEmail,
+    privateKey,
+  }
+}
+
 function getAdminApp() {
   if (!getApps().length) {
+    const credentials = getAdminCredentials()
+
     initializeApp({
-      credential: cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-      }),
+      credential: cert(credentials),
     })
   }
 

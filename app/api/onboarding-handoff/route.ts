@@ -1,22 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { initializeApp, getApps, cert } from "firebase-admin/app"
-import { getFirestore } from "firebase-admin/firestore"
+import { getAdminDb } from "@/lib/firebase-admin"
 
 const DEFAULT_MARKETING_SITE_URL = "https://readyaimgo.biz"
-
-function getAdminDb() {
-  if (!getApps().length) {
-    initializeApp({
-      credential: cert({
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-      }),
-    })
-  }
-
-  return getFirestore()
-}
 
 function readString(data: Record<string, unknown>, key: string) {
   const value = data[key]
