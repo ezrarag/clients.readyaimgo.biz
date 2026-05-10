@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { addBeamTransaction, getBeamTransactions } from "@/lib/beamCoin"
-import { getDb } from "@/lib/firebase/config"
-import { doc, updateDoc, collection, query, where, getDocs } from "firebase/firestore"
+import { getAdminDb } from "@/lib/firebase-admin"
+import { isClientAllowed, resolvePortalIdentity } from "@/lib/portal-auth"
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -12,6 +12,11 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const identity = await resolvePortalIdentity(request, clientId)
+    if (!identity || !isClientAllowed(identity, clientId)) {
+      return NextResponse.json({ error: "Portal access unavailable." }, { status: 403 })
+    }
+
     const transactions = await getBeamTransactions(clientId)
     return NextResponse.json(transactions)
   } catch (error: any) {
@@ -38,27 +43,33 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const identity = await resolvePortalIdentity(request, clientId)
+    if (!identity || !isClientAllowed(identity, clientId)) {
+      return NextResponse.json({ error: "Portal access unavailable." }, { status: 403 })
+    }
+
     // Post transaction to BEAM Coin Ledger
     const result = await addBeamTransaction(clientId, type, amount, description)
 
-    // Update Firestore cache with new balance (find by uid field)
+    // Update Firestore cache with new balance.
     try {
-      const firestoreDb = getDb()
-      const clientsRef = collection(firestoreDb, "clients")
-      const q = query(clientsRef, where("uid", "==", clientId))
-      const snapshot = await getDocs(q)
-      
-      if (!snapshot.empty) {
-        const clientDoc = snapshot.docs[0]
-        const currentBalance = clientDoc.data().beamCoinBalance || 0
+      const clientRef = getAdminDb().collection("clients").doc(clientId)
+      const clientSnapshot = await clientRef.get()
+
+      if (clientSnapshot.exists) {
+        const clientData = clientSnapshot.data() as Record<string, unknown>
+        const currentBalance =
+          typeof clientData.beamCoinBalance === "number"
+            ? clientData.beamCoinBalance
+            : 0
         const newBalance = type === "earn" 
           ? currentBalance + amount 
           : Math.max(0, currentBalance - amount)
 
-        await updateDoc(doc(firestoreDb, "clients", clientDoc.id), {
+        await clientRef.set({
           beamCoinBalance: newBalance,
           beamCoinLastUpdated: new Date(),
-        })
+        }, { merge: true })
       }
     } catch (updateError) {
       console.error("Error updating Firestore cache:", updateError)

@@ -2,19 +2,10 @@ import { type NextRequest, NextResponse } from "next/server"
 import { FieldValue } from "firebase-admin/firestore"
 
 import { normalizeBeamProjectDocument } from "@/lib/beam"
-import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
+import { getAdminDb } from "@/lib/firebase-admin"
+import { isClientAllowed, resolvePortalIdentity } from "@/lib/portal-auth"
 
 export const dynamic = "force-dynamic"
-
-function getBearerToken(request: NextRequest) {
-  const authorizationHeader = request.headers.get("authorization") || ""
-
-  if (!authorizationHeader.startsWith("Bearer ")) {
-    return null
-  }
-
-  return authorizationHeader.slice("Bearer ".length).trim()
-}
 
 function normalizeProjectId(value: unknown) {
   return typeof value === "string" ? value.trim() : ""
@@ -65,19 +56,10 @@ function parseGitHubRepository(repositoryUrl: string) {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const idToken = getBearerToken(request)
-    if (!idToken) {
+    const identity = await resolvePortalIdentity(request)
+    if (!identity) {
       return NextResponse.json(
-        { error: "Missing Firebase authorization token." },
-        { status: 401 }
-      )
-    }
-
-    const decodedToken = await getAdminAuth().verifyIdToken(idToken)
-    const email = decodedToken.email?.trim().toLowerCase()
-    if (!email) {
-      return NextResponse.json(
-        { error: "Authenticated email required." },
+        { error: "Portal access unavailable for this account." },
         { status: 403 }
       )
     }
@@ -106,12 +88,12 @@ export async function PATCH(request: NextRequest) {
     }
 
     const projectData = projectSnapshot.data() as Record<string, unknown>
-    const clientPortalEmail =
-      typeof projectData.clientPortalEmail === "string"
-        ? projectData.clientPortalEmail.trim().toLowerCase()
+    const projectClientId =
+      typeof projectData.clientId === "string"
+        ? projectData.clientId.trim().toLowerCase()
         : ""
 
-    if (clientPortalEmail !== email) {
+    if (!isClientAllowed(identity, projectClientId)) {
       return NextResponse.json(
         { error: "This project is not available for the signed-in account." },
         { status: 403 }
@@ -127,8 +109,8 @@ export async function PATCH(request: NextRequest) {
           fullName: repository.fullName,
           url: repository.url,
           deploymentUrl,
-          attachedByUid: decodedToken.uid,
-          attachedByEmail: email,
+          attachedByUid: identity.uid,
+          attachedByEmail: identity.email,
           attachedAt: FieldValue.serverTimestamp(),
         },
       },

@@ -8,6 +8,11 @@ import {
   parseDollarAmount,
 } from "@/lib/deliverables"
 import { getEffectiveRoles, normalizeBeamUserDocument } from "@/lib/beam"
+import {
+  isClientAllowed,
+  resolvePortalIdentity,
+  type PortalIdentity,
+} from "@/lib/portal-auth"
 
 export const dynamic = "force-dynamic"
 
@@ -42,7 +47,9 @@ async function getRequestContext(request: NextRequest) {
   )
   const roles = getEffectiveRoles({ uid: decoded.uid, roles: beamUser.roles })
 
-  return { auth, db, decoded, email, roles }
+  const portalIdentity = await resolvePortalIdentity(request)
+
+  return { auth, db, decoded, email, roles, portalIdentity }
 }
 
 function canManageDeliverables(roles: string[]) {
@@ -54,27 +61,16 @@ function canManageDeliverables(roles: string[]) {
 }
 
 async function canReadClientDeliverables({
-  db,
   clientId,
-  email,
   roles,
+  portalIdentity,
 }: {
-  db: FirebaseFirestore.Firestore
   clientId: string
-  email: string
   roles: string[]
+  portalIdentity: PortalIdentity | null
 }) {
   if (canManageDeliverables(roles)) return true
-  if (!email) return false
-
-  const projectSnapshot = await db
-    .collection("projects")
-    .where("clientId", "==", clientId)
-    .where("clientPortalEmail", "==", email)
-    .limit(1)
-    .get()
-
-  return !projectSnapshot.empty
+  return portalIdentity ? isClientAllowed(portalIdentity, clientId) : false
 }
 
 export async function GET(request: NextRequest) {
@@ -88,10 +84,9 @@ export async function GET(request: NextRequest) {
     if ("error" in context) return context.error
 
     const allowed = await canReadClientDeliverables({
-      db: context.db,
       clientId,
-      email: context.email,
       roles: context.roles,
+      portalIdentity: context.portalIdentity,
     })
     if (!allowed) {
       return NextResponse.json({ error: "Deliverables unavailable for this account." }, { status: 403 })

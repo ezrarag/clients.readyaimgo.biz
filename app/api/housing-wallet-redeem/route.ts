@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getDb } from "@/lib/firebase/config"
-import { doc, updateDoc, addDoc, collection, query, where, getDocs } from "firebase/firestore"
+import { FieldValue } from "firebase-admin/firestore"
+
+import { getAdminDb } from "@/lib/firebase-admin"
 import { addBeamTransaction } from "@/lib/beamCoin"
+import { isClientAllowed, resolvePortalIdentity } from "@/lib/portal-auth"
 
 export async function POST(request: NextRequest) {
   try {
     const { clientId, credits, description } = await request.json()
-    const firestoreDb = getDb()
 
     if (!clientId || credits === undefined || credits <= 0) {
       return NextResponse.json(
@@ -15,18 +16,24 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Find client document by uid field (documents are keyed by email)
-    const clientsRef = collection(firestoreDb, "clients")
-    const q = query(clientsRef, where("uid", "==", clientId))
-    const snapshot = await getDocs(q)
-    
-    if (snapshot.empty) {
+    const identity = await resolvePortalIdentity(request, clientId)
+    if (!identity || !isClientAllowed(identity, clientId)) {
+      return NextResponse.json({ error: "Portal access unavailable." }, { status: 403 })
+    }
+
+    const db = getAdminDb()
+    const clientRef = db.collection("clients").doc(clientId)
+    const clientSnapshot = await clientRef.get()
+
+    if (!clientSnapshot.exists) {
       return NextResponse.json({ error: "Client not found" }, { status: 404 })
     }
 
-    const clientDoc = snapshot.docs[0]
-    const clientData = clientDoc.data()
-    const currentCredits = clientData.housingWalletBalance || 0
+    const clientData = clientSnapshot.data() as Record<string, unknown>
+    const currentCredits =
+      typeof clientData.housingWalletBalance === "number"
+        ? clientData.housingWalletBalance
+        : 0
 
     if (currentCredits < credits) {
       return NextResponse.json(
@@ -35,18 +42,17 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Update housing wallet balance (use email as document ID)
     const newBalance = currentCredits - credits
-    await updateDoc(doc(firestoreDb, "clients", clientDoc.id), {
+    await clientRef.set({
       housingWalletBalance: newBalance,
-    })
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })
 
-    // Create transaction record
-    await addDoc(collection(firestoreDb, "transactions"), {
+    await db.collection("transactions").add({
       clientId,
       type: "redemption",
       amount: credits * 1.5, // $1.50 per credit
-      timestamp: new Date(),
+      timestamp: FieldValue.serverTimestamp(),
       description: description || `Housing redemption - ${credits} credits`,
     })
 

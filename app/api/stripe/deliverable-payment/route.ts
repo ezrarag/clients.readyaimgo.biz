@@ -2,8 +2,9 @@ import { type NextRequest, NextResponse } from "next/server"
 import { FieldValue } from "firebase-admin/firestore"
 import Stripe from "stripe"
 
-import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
+import { getAdminDb } from "@/lib/firebase-admin"
 import { normalizeClientDeliverableDocument } from "@/lib/deliverables"
+import { isClientAllowed, resolvePortalIdentity } from "@/lib/portal-auth"
 
 export const dynamic = "force-dynamic"
 
@@ -25,29 +26,20 @@ function getStripe() {
   return stripeInstance
 }
 
-function getBearerToken(request: NextRequest) {
-  const authorization = request.headers.get("authorization") || ""
-  return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : null
-}
-
 async function authorizeDeliverablePayment(request: NextRequest, clientId: string) {
-  const token = getBearerToken(request)
-  if (!token) {
-    return { error: NextResponse.json({ error: "Missing authorization token." }, { status: 401 }) }
+  const normalizedClientId = clientId.trim().toLowerCase()
+  const identity = await resolvePortalIdentity(request, normalizedClientId)
+  if (!identity || !isClientAllowed(identity, normalizedClientId)) {
+    return { error: NextResponse.json({ error: "Project not available for this account." }, { status: 403 }) }
   }
-
-  const decoded = await getAdminAuth().verifyIdToken(token)
-  const email = decoded.email?.toLowerCase().trim()
-  if (!email) {
+  if (!identity.email) {
     return { error: NextResponse.json({ error: "Authenticated email required." }, { status: 403 }) }
   }
 
-  const normalizedClientId = clientId.trim().toLowerCase()
   const db = getAdminDb()
   const projectSnapshot = await db
     .collection("projects")
     .where("clientId", "==", normalizedClientId)
-    .where("clientPortalEmail", "==", email)
     .limit(1)
     .get()
 
@@ -57,8 +49,8 @@ async function authorizeDeliverablePayment(request: NextRequest, clientId: strin
 
   return {
     db,
-    email,
-    uid: decoded.uid,
+    email: identity.email,
+    uid: identity.uid,
     clientId: normalizedClientId,
     projectId: projectSnapshot.docs[0].id,
     project: projectSnapshot.docs[0].data() as Record<string, unknown>,

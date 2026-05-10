@@ -10,7 +10,11 @@ import {
 } from "@/lib/beam"
 
 function readAdminEnv(name: string) {
-  return process.env[name] || process.env[`NEXT_PUBLIC_${name}`]
+  return process.env[name]
+}
+
+function emailToDocId(email: string) {
+  return email.trim().toLowerCase().replace(/\./g, "_")
 }
 
 function getAdminCredentials() {
@@ -73,6 +77,22 @@ export async function getAuthenticatedBeamUser(request: NextRequest) {
   const db = getAdminDb()
   const decodedToken = await auth.verifyIdToken(idToken)
   const sourceNgo = deriveSourceNgo(request.headers.get("host"))
+
+  // Revocation gate: deny only explicit ragAllowlist/{emailDocId}.active === false.
+  const email = (decodedToken.email ?? "").trim().toLowerCase()
+  if (email) {
+    const allowlistSnap = await db.collection("ragAllowlist").doc(emailToDocId(email)).get()
+    const isRevoked =
+      allowlistSnap.exists &&
+      (allowlistSnap.data() as Record<string, unknown>).active === false
+
+    if (isRevoked) {
+      const revoked = new Error("Access revoked. Contact your administrator.")
+      ;(revoked as Error & { status?: number }).status = 403
+      throw revoked
+    }
+  }
+
   const userSnapshot = await db.collection("users").doc(decodedToken.uid).get()
   const beamUser = normalizeBeamUserDocument(
     decodedToken.uid,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getDb } from "@/lib/firebase/config"
-import { collection, query, where, getDocs } from "firebase/firestore"
+
+import { getAdminDb } from "@/lib/firebase-admin"
+import { isClientAllowed, resolvePortalIdentity } from "@/lib/portal-auth"
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -11,22 +12,28 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const firestoreDb = getDb()
-    // Find client document by uid field (documents are keyed by email)
-    const clientsRef = collection(firestoreDb, "clients")
-    const q = query(clientsRef, where("uid", "==", clientId))
-    const snapshot = await getDocs(q)
-    
-    if (snapshot.empty) {
+    const identity = await resolvePortalIdentity(request, clientId)
+    if (!identity || !isClientAllowed(identity, clientId)) {
+      return NextResponse.json({ error: "Portal access unavailable." }, { status: 403 })
+    }
+
+    const clientSnapshot = await getAdminDb().collection("clients").doc(clientId).get()
+
+    if (!clientSnapshot.exists) {
       return NextResponse.json({ error: "Client not found" }, { status: 404 })
     }
 
-    const clientData = snapshot.docs[0].data()
+    const clientData = clientSnapshot.data() as Record<string, unknown>
     
-    // Mock housing wallet data - in production, fetch from BEAM Coin API
     const housingWallet = {
-      credits: clientData.housingWalletBalance || 300,
-      value: (clientData.housingWalletBalance || 300) * 1.5, // $1.50 per credit
+      credits:
+        typeof clientData.housingWalletBalance === "number"
+          ? clientData.housingWalletBalance
+          : 300,
+      value:
+        (typeof clientData.housingWalletBalance === "number"
+          ? clientData.housingWalletBalance
+          : 300) * 1.5,
       description: "Housing credits available for hotel redemptions",
     }
 

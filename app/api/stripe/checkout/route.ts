@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import Stripe from "stripe"
 
+import { isClientAllowed, resolvePortalIdentity } from "@/lib/portal-auth"
+
 // Lazy initialization to avoid build-time errors
 let stripeInstance: Stripe | null = null
 
@@ -21,12 +23,20 @@ const getStripe = (): Stripe => {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { clientId, email } = body
+    const { clientId } = body
 
-    if (!clientId || !email) {
+    if (!clientId) {
       return NextResponse.json(
-        { error: "clientId and email are required" },
+        { error: "clientId is required" },
         { status: 400 }
+      )
+    }
+
+    const identity = await resolvePortalIdentity(request, clientId)
+    if (!identity || !isClientAllowed(identity, clientId) || !identity.email) {
+      return NextResponse.json(
+        { error: "Portal access unavailable for this account." },
+        { status: 403 }
       )
     }
 
@@ -39,7 +49,7 @@ export async function POST(request: NextRequest) {
     const stripe = getStripe()
     let customerId: string
     const customers = await stripe.customers.list({
-      email: email,
+      email: identity.email,
       limit: 1,
     })
 
@@ -47,9 +57,10 @@ export async function POST(request: NextRequest) {
       customerId = customers.data[0].id
     } else {
       const customer = await stripe.customers.create({
-        email: email,
+        email: identity.email,
         metadata: {
           firebase_uid: clientId,
+          clientId,
         },
       })
       customerId = customer.id
@@ -70,7 +81,8 @@ export async function POST(request: NextRequest) {
       cancel_url: `${appUrl}/dashboard?canceled=true`,
       metadata: {
         firebase_uid: clientId,
-        email: email,
+        clientId,
+        email: identity.email,
       },
     })
 
@@ -83,4 +95,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-

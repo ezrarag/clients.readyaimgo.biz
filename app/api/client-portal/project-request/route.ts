@@ -1,19 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { FieldValue } from "firebase-admin/firestore"
 
-import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
+import { getAdminDb } from "@/lib/firebase-admin"
+import { isClientAllowed, resolvePortalIdentity } from "@/lib/portal-auth"
 
 export const dynamic = "force-dynamic"
-
-function getBearerToken(request: NextRequest) {
-  const authorizationHeader = request.headers.get("authorization") || ""
-
-  if (!authorizationHeader.startsWith("Bearer ")) {
-    return null
-  }
-
-  return authorizationHeader.slice("Bearer ".length).trim()
-}
 
 function readRequiredString(value: unknown, fieldName: string) {
   if (typeof value !== "string" || !value.trim()) {
@@ -29,19 +20,10 @@ function readOptionalString(value: unknown) {
 
 export async function POST(request: NextRequest) {
   try {
-    const idToken = getBearerToken(request)
-    if (!idToken) {
+    const identity = await resolvePortalIdentity(request)
+    if (!identity) {
       return NextResponse.json(
-        { error: "Missing Firebase authorization token." },
-        { status: 401 }
-      )
-    }
-
-    const decodedToken = await getAdminAuth().verifyIdToken(idToken)
-    const email = decodedToken.email?.trim().toLowerCase()
-    if (!email) {
-      return NextResponse.json(
-        { error: "Authenticated email required." },
+        { error: "Portal access unavailable for this account." },
         { status: 403 }
       )
     }
@@ -56,7 +38,19 @@ export async function POST(request: NextRequest) {
     const repositoryUrl = readOptionalString(body.repositoryUrl)
     const notes = readOptionalString(body.notes)
     const currentPortalProjectId = readOptionalString(body.currentPortalProjectId)
-    const currentPortalClientId = readOptionalString(body.currentPortalClientId)
+    const requestedClientId = readOptionalString(body.currentPortalClientId)
+
+    if (requestedClientId && !isClientAllowed(identity, requestedClientId)) {
+      return NextResponse.json(
+        { error: "This client workspace is not available for the signed-in account." },
+        { status: 403 }
+      )
+    }
+
+    const currentPortalClientId =
+      requestedClientId && isClientAllowed(identity, requestedClientId)
+        ? requestedClientId.trim().toLowerCase()
+        : identity.activeClientId
 
     const db = getAdminDb()
     const requestRef = db.collection("clientProjectRequests").doc()
@@ -68,9 +62,9 @@ export async function POST(request: NextRequest) {
       organizationName,
       repositoryUrl,
       notes,
-      requestedByUid: decodedToken.uid,
-      requestedByEmail: email,
-      requestedByName: decodedToken.name || email,
+      requestedByUid: identity.uid,
+      requestedByEmail: identity.email,
+      requestedByName: identity.email,
       currentPortalProjectId,
       currentPortalClientId,
       status: "pending",

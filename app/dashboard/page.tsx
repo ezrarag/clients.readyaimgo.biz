@@ -16,7 +16,7 @@ import {
   UserRound,
   Wallet,
 } from "lucide-react"
-import { collection, doc, getDoc, getDocs, orderBy, query, where } from "firebase/firestore"
+import { collection, getDocs, orderBy, query, where } from "firebase/firestore"
 
 import { useAuth } from "@/components/auth/AuthProvider"
 import { RagNotesFeed } from "@/components/rag-notes-feed"
@@ -62,7 +62,7 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
 function DashboardPageContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
-  const { user, effectiveRoles, loading: authLoading } = useAuth()
+  const { user, effectiveRoles, activeClientId, loading: authLoading } = useAuth()
 
   const [client, setClient] = useState<Client | null>(null)
   const [subscription, setSubscription] = useState<Subscription | null>(null)
@@ -134,10 +134,10 @@ function DashboardPageContent() {
     setBeamCoinBalance(null)
     setBeamCoinTransactions([])
     setPageLoading(false)
-  }, [user])
+  }, [activeClientId, user])
 
   const loadDashboardData = async () => {
-    if (!user?.email) {
+    if (!user) {
       setClient(null)
       setPageLoading(false)
       return
@@ -148,10 +148,9 @@ function DashboardPageContent() {
       setBeamCoinError(null)
 
       const firestoreDb = getDb()
-      const emailKey = user.email.toLowerCase().trim()
-      const clientDoc = await getDoc(doc(firestoreDb, "clients", emailKey))
+      const clientId = activeClientId
 
-      if (!clientDoc.exists()) {
+      if (!clientId) {
         setClient(null)
         setSubscription(null)
         setHousingWallet(null)
@@ -161,11 +160,37 @@ function DashboardPageContent() {
         return
       }
 
-      const docData = clientDoc.data()
+      const identityToken = await user.getIdToken()
+      const clientResponse = await fetch("/api/client-portal/identity", {
+        headers: {
+          Authorization: `Bearer ${identityToken}`,
+        },
+        cache: "no-store",
+      })
+
+      if (!clientResponse.ok) {
+        throw new Error("Unable to load the active client profile.")
+      }
+
+      const clientPayload = (await clientResponse.json()) as {
+        client?: Partial<Client> | null
+      }
+      const docData = clientPayload.client
+
+      if (!docData) {
+        setClient(null)
+        setSubscription(null)
+        setHousingWallet(null)
+        setTransactions([])
+        setBeamCoinBalance(null)
+        setBeamCoinTransactions([])
+        return
+      }
+
       const clientData: Client = {
-        uid: docData.uid || user.uid,
+        uid: docData.uid || clientId,
         name: docData.name || "",
-        email: docData.email || user.email,
+        email: docData.email || user.email || "",
         beamCoinBalance: docData.beamCoinBalance || 0,
         housingWalletBalance: docData.housingWalletBalance || 0,
         stripeCustomerId: docData.stripeCustomerId,
@@ -185,7 +210,10 @@ function DashboardPageContent() {
         claimedStoryId: docData.claimedStoryId || "",
         claimedClientName: docData.claimedClientName || "",
         partnerTier: docData.partnerTier === "agency" ? "agency" : docData.partnerTier ?? null,
-        partnerSince: docData.partnerSince?.toDate?.() || docData.partnerSince || null,
+        partnerSince:
+          (docData.partnerSince as { toDate?: () => Date } | null)?.toDate?.() ||
+          docData.partnerSince ||
+          null,
         partnerCommissionPct:
           typeof docData.partnerCommissionPct === "number"
             ? docData.partnerCommissionPct
@@ -194,7 +222,7 @@ function DashboardPageContent() {
           typeof docData.partnerReferralCount === "number"
             ? docData.partnerReferralCount
             : undefined,
-        createdAt: docData.createdAt?.toDate?.() || docData.createdAt,
+        createdAt: docData.createdAt as Date | undefined,
       }
 
       setClient(clientData)
@@ -214,7 +242,13 @@ function DashboardPageContent() {
         setSubscription(null)
       }
 
-      const housingWalletResponse = await fetch(`/api/housing-wallet?clientId=${user.uid}`)
+      const authHeaders = {
+        Authorization: `Bearer ${identityToken}`,
+      }
+      const housingWalletResponse = await fetch(
+        `/api/housing-wallet?clientId=${clientId}`,
+        { headers: authHeaders }
+      )
       if (housingWalletResponse.ok) {
         const housingWalletData = await housingWalletResponse.json()
         setHousingWallet(housingWalletData)
@@ -224,7 +258,7 @@ function DashboardPageContent() {
 
       const transactionsQuery = query(
         collection(firestoreDb, "transactions"),
-        where("clientId", "==", user.uid),
+        where("clientId", "==", clientId),
         orderBy("timestamp", "desc")
       )
 
@@ -237,7 +271,7 @@ function DashboardPageContent() {
       })) as Transaction[]
 
       setTransactions(transactionsData)
-      await loadBeamCoinBalance(user.uid, clientData.beamCoinBalance || 0)
+      await loadBeamCoinBalance(clientId, clientData.beamCoinBalance || 0)
     } catch (error: any) {
       console.error("Error loading dashboard data:", error)
 
@@ -260,7 +294,15 @@ function DashboardPageContent() {
     setBeamCoinError(null)
 
     try {
-      const balanceResponse = await fetch(`/api/beam-coin?clientId=${uid}`)
+      const token = await user?.getIdToken()
+      const authHeaders = token
+        ? {
+            Authorization: `Bearer ${token}`,
+          }
+        : undefined
+      const balanceResponse = await fetch(`/api/beam-coin?clientId=${uid}`, {
+        headers: authHeaders,
+      })
       if (!balanceResponse.ok) {
         throw new Error("Failed to fetch BEAM Coin balance")
       }
@@ -272,7 +314,10 @@ function DashboardPageContent() {
         currentClient ? { ...currentClient, beamCoinBalance: nextBalance } : currentClient
       )
 
-      const transactionsResponse = await fetch(`/api/beam-coin/transactions?clientId=${uid}`)
+      const transactionsResponse = await fetch(
+        `/api/beam-coin/transactions?clientId=${uid}`,
+        { headers: authHeaders }
+      )
       if (transactionsResponse.ok) {
         const nextTransactions = await transactionsResponse.json()
         setBeamCoinTransactions(
@@ -289,11 +334,11 @@ function DashboardPageContent() {
   }
 
   const handleRefreshBeamCoin = () => {
-    if (!user || !client) {
+    if (!activeClientId || !client) {
       return
     }
 
-    void loadBeamCoinBalance(user.uid, client.beamCoinBalance || 0)
+    void loadBeamCoinBalance(activeClientId, client.beamCoinBalance || 0)
   }
 
   const handleToggleParticipantPreview = () => {
@@ -340,12 +385,19 @@ function DashboardPageContent() {
   }
 
   const handleCheckout = async () => {
+    if (!activeClientId || !user) {
+      return
+    }
+
     try {
       const response = await fetch("/api/stripe/checkout", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${await user?.getIdToken()}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          clientId: user?.uid,
+          clientId: activeClientId,
           email: user?.email,
         }),
       })
@@ -367,7 +419,7 @@ function DashboardPageContent() {
   }
 
   const handleRedeemCredits = async () => {
-    if (!user || !redeemAmount) {
+    if (!activeClientId || !user || !redeemAmount) {
       return
     }
 
@@ -385,9 +437,12 @@ function DashboardPageContent() {
     try {
       const response = await fetch("/api/housing-wallet-redeem", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${await user?.getIdToken()}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          clientId: user.uid,
+          clientId: activeClientId,
           credits,
           description: `Redeemed ${credits} housing credits`,
         }),
@@ -583,7 +638,7 @@ function DashboardPageContent() {
               </p>
               <p className="text-sm leading-7 text-slate-600">
                 {viewAsParticipant
-                  ? "The participant-only preview is active, but this admin account does not have a matching `clients/{email}` record to populate the subscription and wallet cards."
+                  ? "The participant-only preview is active, but this admin account does not have an active client membership to populate the subscription and wallet cards."
                   : "Use the admin projects area to create and manage project records. This dashboard only renders the participant-facing experience."}
               </p>
               {beamCoinError ? (

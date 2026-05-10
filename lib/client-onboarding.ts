@@ -1,5 +1,6 @@
 import type { User } from "firebase/auth"
 import {
+  arrayUnion,
   doc,
   getDoc,
   serverTimestamp,
@@ -193,9 +194,13 @@ export async function upsertClientAccountRecord({
     throw new Error("A verified email is required to create a client account.")
   }
 
-  const emailKey = user.email.toLowerCase().trim()
   const isPhoneOnlyHandoff = handoff?.workEmail?.endsWith("@phone.readyaimgo.internal") ?? false
-  const clientRef = doc(firestoreDb, "clients", emailKey)
+  const existingClaimedClientId =
+    claimPreview?.id ||
+    handoff?.claimedClientId ||
+    (handoff?.mode === "new" ? `client_${user.uid}` : "")
+  const clientId = (existingClaimedClientId || `client_${user.uid}`).trim().toLowerCase()
+  const clientRef = doc(firestoreDb, "clients", clientId)
   const existingSnapshot = await getDoc(clientRef)
   const existing = existingSnapshot.exists()
     ? (existingSnapshot.data() as Record<string, unknown>)
@@ -255,8 +260,7 @@ export async function upsertClientAccountRecord({
           : null),
       onboardedViaPhone: isPhoneOnlyHandoff || (typeof existing?.onboardedViaPhone === "boolean" ? existing.onboardedViaPhone : false),
       claimedClientId:
-        claimPreview?.id ||
-        handoff?.claimedClientId ||
+        clientId ||
         (typeof existing?.claimedClientId === "string"
           ? existing.claimedClientId
           : null),
@@ -284,6 +288,25 @@ export async function upsertClientAccountRecord({
         existing?.createdAt ??
         serverTimestamp(),
       onboardingUpdatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  )
+
+  const membershipTimestamp = new Date().toISOString()
+  await setDoc(
+    doc(firestoreDb, "users", user.uid),
+    {
+      client_id: clientId,
+      clientIds: arrayUnion(clientId),
+      memberships: {
+        [clientId]: {
+          role: "owner",
+          status: "active",
+          createdAt: membershipTimestamp,
+          updatedAt: membershipTimestamp,
+        },
+      },
       updatedAt: serverTimestamp(),
     },
     { merge: true }

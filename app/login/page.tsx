@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useEffect, useState, type FormEvent } from "react"
+import { Suspense, useEffect, useRef, useState, type FormEvent } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 
@@ -34,6 +34,9 @@ function LoginPageContent() {
   const [loading, setLoading] = useState(false)
   const [handoffPayload, setHandoffPayload] = useState<ClientPortalHandoffPayload | null>(null)
   const [handoffLoading, setHandoffLoading] = useState(Boolean(handoffId))
+  // Prevents the auth-state useEffect from double-redirecting when a sign-in
+  // handler is already mid-flight (e.g. Google popup just resolved).
+  const redirectingRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -93,6 +96,10 @@ function LoginPageContent() {
 
     if (!handoffPayload) {
       if (!handoffId) {
+        // Skip if a sign-in handler (email/password or Google) is already
+        // mid-flight and will handle the redirect itself.
+        if (redirectingRef.current) return
+
         let cancelled = false
 
         const redirectSignedInUser = async () => {
@@ -207,6 +214,7 @@ function LoginPageContent() {
     event.preventDefault()
     setError("")
     setLoading(true)
+    redirectingRef.current = true
 
     try {
       const result = await signIn(email, password)
@@ -223,6 +231,7 @@ function LoginPageContent() {
       )
       router.push(destination)
     } catch (submitError) {
+      redirectingRef.current = false
       setError(
         submitError instanceof Error ? submitError.message : "Unable to sign in."
       )
@@ -233,6 +242,7 @@ function LoginPageContent() {
   const handleGoogleSignIn = async () => {
     setError("")
     setLoading(true)
+    redirectingRef.current = true
 
     try {
       const result = await signInWithGoogle()
@@ -249,6 +259,7 @@ function LoginPageContent() {
       )
       router.push(destination)
     } catch (googleError) {
+      redirectingRef.current = false
       setError(
         googleError instanceof Error
           ? googleError.message

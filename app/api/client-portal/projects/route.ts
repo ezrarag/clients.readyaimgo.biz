@@ -1,52 +1,49 @@
 import { type NextRequest, NextResponse } from "next/server"
 
 import { normalizeBeamProjectDocument } from "@/lib/beam"
-import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
+import { getAdminDb } from "@/lib/firebase-admin"
+import { resolvePortalIdentity } from "@/lib/portal-auth"
 
 export const dynamic = "force-dynamic"
 
-function getBearerToken(request: NextRequest) {
-  const authorizationHeader = request.headers.get("authorization") || ""
-
-  if (!authorizationHeader.startsWith("Bearer ")) {
-    return null
-  }
-
-  return authorizationHeader.slice("Bearer ".length).trim()
-}
-
 export async function GET(request: NextRequest) {
   try {
-    const idToken = getBearerToken(request)
-    if (!idToken) {
+    const identity = await resolvePortalIdentity(request)
+    if (!identity) {
       return NextResponse.json(
-        { error: "Missing Firebase authorization token." },
-        { status: 401 }
-      )
-    }
-
-    const decodedToken = await getAdminAuth().verifyIdToken(idToken)
-    const email = decodedToken.email?.trim().toLowerCase()
-    if (!email) {
-      return NextResponse.json(
-        { error: "Authenticated email required." },
+        { error: "Portal access unavailable for this account." },
         { status: 403 }
       )
     }
 
-    const snapshot = await getAdminDb()
-      .collection("projects")
-      .where("clientPortalEmail", "==", email)
-      .limit(20)
-      .get()
+    const db = getAdminDb()
+    const projectDocs: FirebaseFirestore.QueryDocumentSnapshot[] = []
+    const clientIdChunks =
+      identity.clientIds.length > 0 ? identity.clientIds.slice(0, 30) : []
+
+    if (clientIdChunks.length === 1) {
+      const snapshot = await db
+        .collection("projects")
+        .where("clientId", "==", clientIdChunks[0])
+        .limit(20)
+        .get()
+      projectDocs.push(...snapshot.docs)
+    } else if (clientIdChunks.length > 1) {
+      const snapshot = await db
+        .collection("projects")
+        .where("clientId", "in", clientIdChunks)
+        .limit(20)
+        .get()
+      projectDocs.push(...snapshot.docs)
+    }
+
+    const projects = projectDocs.map((doc) =>
+      normalizeBeamProjectDocument(doc.id, doc.data() as Record<string, unknown>)
+    )
 
     return NextResponse.json({
-      projects: snapshot.docs.map((doc) =>
-        normalizeBeamProjectDocument(
-          doc.id,
-          doc.data() as Record<string, unknown>
-        )
-      ),
+      projects,
+      data: projects,
     })
   } catch (error) {
     console.error("Client portal projects error:", error)

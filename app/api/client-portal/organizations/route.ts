@@ -1,41 +1,44 @@
 import { type NextRequest, NextResponse } from "next/server"
 
-import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
+import { getAdminDb } from "@/lib/firebase-admin"
 import { normalizeOrganization } from "@/lib/organizations"
+import { resolvePortalIdentity } from "@/lib/portal-auth"
 
 export const dynamic = "force-dynamic"
 
-function getBearerToken(request: NextRequest) {
-  const authorizationHeader = request.headers.get("authorization") || ""
-
-  if (!authorizationHeader.startsWith("Bearer ")) {
-    return null
-  }
-
-  return authorizationHeader.slice("Bearer ".length).trim()
-}
-
 export async function GET(request: NextRequest) {
   try {
-    const idToken = getBearerToken(request)
-    if (!idToken) {
+    const identity = await resolvePortalIdentity(request)
+    if (!identity) {
       return NextResponse.json(
-        { error: "Missing Firebase authorization token." },
-        { status: 401 }
+        { error: "Portal access unavailable for this account." },
+        { status: 403 }
       )
     }
 
-    await getAdminAuth().verifyIdToken(idToken)
-
-    const snapshot = await getAdminDb()
-      .collection("organizations")
+    const db = getAdminDb()
+    const memberSnapshot = await db
+      .collectionGroup("members")
+      .where("uid", "==", identity.uid)
       .limit(100)
       .get()
 
+    const organizationDocs = await Promise.all(
+      memberSnapshot.docs.map(async (memberDoc) => {
+        const organizationRef = memberDoc.ref.parent.parent
+        return organizationRef ? organizationRef.get() : null
+      })
+    )
+
     return NextResponse.json({
-      organizations: snapshot.docs.map((doc) =>
-        normalizeOrganization(doc.id, doc.data() as Record<string, unknown>)
-      ),
+      organizations: organizationDocs
+        .filter(
+          (doc): doc is FirebaseFirestore.DocumentSnapshot =>
+            Boolean(doc?.exists)
+        )
+        .map((doc) =>
+          normalizeOrganization(doc.id, doc.data() as Record<string, unknown>)
+        ),
     })
   } catch (error) {
     console.error("Client portal organizations error:", error)

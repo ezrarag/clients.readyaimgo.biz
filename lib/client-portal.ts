@@ -1,13 +1,6 @@
-import {
-  collection,
-  getDocs,
-  limit,
-  query,
-  type Firestore,
-  where,
-} from "firebase/firestore"
+import { type Firestore } from "firebase/firestore"
 
-import { normalizeBeamProjectDocument, type BeamProject } from "@/lib/beam"
+import { type BeamProject } from "@/lib/beam"
 
 type AuthLikeUser = {
   uid?: string | null
@@ -84,28 +77,9 @@ export async function findClientPortalProjectByEmail(
   firestoreDb: Firestore,
   email?: string | null
 ): Promise<BeamProject | null> {
-  const normalizedEmail = normalizeEmail(email)
-  if (!normalizedEmail) {
-    return null
-  }
-
-  const snapshot = await getDocs(
-    query(
-      collection(firestoreDb, "projects"),
-      where("clientPortalEmail", "==", normalizedEmail),
-      limit(1)
-    )
-  )
-
-  if (snapshot.empty) {
-    return null
-  }
-
-  const projectDoc = snapshot.docs[0]
-  return normalizeBeamProjectDocument(
-    projectDoc.id,
-    projectDoc.data() as Record<string, unknown>
-  )
+  void firestoreDb
+  void email
+  return null
 }
 
 export async function findClientPortalProjectByIdAndEmail({
@@ -117,31 +91,10 @@ export async function findClientPortalProjectByIdAndEmail({
   clientId: string
   email?: string | null
 }): Promise<BeamProject | null> {
-  const normalizedEmail = normalizeEmail(email)
-  const normalizedClientId = clientId.trim().toLowerCase()
-
-  if (!normalizedEmail || !normalizedClientId) {
-    return null
-  }
-
-  const snapshot = await getDocs(
-    query(
-      collection(firestoreDb, "projects"),
-      where("clientId", "==", normalizedClientId),
-      where("clientPortalEmail", "==", normalizedEmail),
-      limit(1)
-    )
-  )
-
-  if (snapshot.empty) {
-    return null
-  }
-
-  const projectDoc = snapshot.docs[0]
-  return normalizeBeamProjectDocument(
-    projectDoc.id,
-    projectDoc.data() as Record<string, unknown>
-  )
+  void firestoreDb
+  void clientId
+  void email
+  return null
 }
 
 export async function loadClientPortalProject({
@@ -164,12 +117,9 @@ export async function loadClientPortalProject({
   } catch (error) {
     console.error("Unable to resolve client portal access via API:", error)
   }
-
-  return findClientPortalProjectByIdAndEmail({
-    firestoreDb,
-    clientId,
-    email: user?.email,
-  })
+  void firestoreDb
+  void clientId
+  return null
 }
 
 export async function resolveClientDestination(
@@ -218,10 +168,6 @@ export async function resolveClientDestination(
     console.error("Unable to resolve client portal destination via API:", error)
   }
 
-  const project = await findClientPortalProjectByEmail(firestoreDb, email)
-  if (!project) {
-    return "/dashboard"
-  }
-
-  return `/portal/${project.clientId}`
+  void firestoreDb
+  return "/dashboard"
 }

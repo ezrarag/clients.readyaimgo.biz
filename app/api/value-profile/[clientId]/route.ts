@@ -1,7 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { FieldValue } from "firebase-admin/firestore"
 
-import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
+import { getAdminDb } from "@/lib/firebase-admin"
+import { isClientAllowed, resolvePortalIdentity } from "@/lib/portal-auth"
 import {
   VALUE_PROFILE_COLLECTION,
   VALUE_PROFILE_PAYMENTS_COLLECTION,
@@ -75,18 +76,16 @@ async function getAuthorizedClientContext(request: NextRequest, clientId: string
     return { error: NextResponse.json({ error: "Missing authorization token." }, { status: 401 }) }
   }
 
-  const decoded = await getAdminAuth().verifyIdToken(token)
-  const email = decoded.email?.toLowerCase().trim()
-  if (!email) {
-    return { error: NextResponse.json({ error: "Authenticated email required." }, { status: 403 }) }
+  const normalizedClientId = clientId.trim().toLowerCase()
+  const identity = await resolvePortalIdentity(request, normalizedClientId)
+  if (!identity || !isClientAllowed(identity, normalizedClientId)) {
+    return { error: NextResponse.json({ error: "Project not available for this account." }, { status: 403 }) }
   }
 
-  const normalizedClientId = clientId.trim().toLowerCase()
   const db = getAdminDb()
   const projectSnapshot = await db
     .collection("projects")
     .where("clientId", "==", normalizedClientId)
-    .where("clientPortalEmail", "==", email)
     .limit(1)
     .get()
 
@@ -96,7 +95,7 @@ async function getAuthorizedClientContext(request: NextRequest, clientId: string
 
   return {
     db,
-    email,
+    email: identity.email,
     clientId: normalizedClientId,
     project: projectSnapshot.docs[0].data() as Record<string, unknown>,
   }

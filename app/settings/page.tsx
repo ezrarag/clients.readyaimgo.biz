@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, LogOut, Save } from "lucide-react"
-import { doc, getDoc, updateDoc } from "firebase/firestore"
 
 import { useAuth } from "@/components/auth/AuthProvider"
 import { AppShell } from "@/components/site/app-shell"
@@ -12,7 +11,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { signOut } from "@/lib/firebase/auth"
-import { getDb } from "@/lib/firebase/config"
 import { Client } from "@/types"
 
 type SaveState =
@@ -23,7 +21,7 @@ type SaveState =
   | null
 
 export default function SettingsPage() {
-  const { user, loading: authLoading } = useAuth()
+  const { user, activeClientId, loading: authLoading } = useAuth()
   const router = useRouter()
   const [client, setClient] = useState<Client | null>(null)
   const [name, setName] = useState("")
@@ -41,27 +39,42 @@ export default function SettingsPage() {
     if (user) {
       loadClientData()
     }
-  }, [user])
+  }, [activeClientId, user])
 
   const loadClientData = async () => {
-    if (!user?.email) return
+    if (!user || !activeClientId) {
+      setPageLoading(false)
+      return
+    }
 
     try {
-      const firestoreDb = getDb()
-      const emailKey = user.email.toLowerCase().trim()
-      const clientDoc = await getDoc(doc(firestoreDb, "clients", emailKey))
+      const token = await user.getIdToken()
+      const response = await fetch("/api/client-portal/identity", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        cache: "no-store",
+      })
 
-      if (clientDoc.exists()) {
-        const docData = clientDoc.data()
+      if (response.ok) {
+        const payload = (await response.json()) as {
+          client?: Partial<Client> | null
+        }
+        const docData = payload.client
+
+        if (!docData) {
+          return
+        }
+
         const clientData: Client = {
-          uid: docData.uid || user.uid,
+          uid: docData.uid || activeClientId,
           name: docData.name || "",
-          email: docData.email || user.email,
+          email: docData.email || user.email || "",
           beamCoinBalance: docData.beamCoinBalance || 0,
           housingWalletBalance: docData.housingWalletBalance || 0,
           stripeCustomerId: docData.stripeCustomerId,
           planType: docData.planType,
-          createdAt: docData.createdAt?.toDate?.() || docData.createdAt,
+          createdAt: docData.createdAt as Date | undefined,
         }
 
         setClient(clientData)
@@ -75,17 +88,29 @@ export default function SettingsPage() {
   }
 
   const handleSave = async () => {
-    if (!user?.email || !client) return
+    if (!user || !client) return
 
     setSaving(true)
     setSaveState(null)
 
     try {
-      const firestoreDb = getDb()
-      const emailKey = user.email.toLowerCase().trim()
-      await updateDoc(doc(firestoreDb, "clients", emailKey), {
-        name,
+      const token = await user.getIdToken()
+      const response = await fetch("/api/client-portal/identity", {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ name }),
       })
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as {
+          error?: string
+        } | null
+        throw new Error(payload?.error || "Unable to save settings right now.")
+      }
+
       setClient({ ...client, name })
       setSaveState({
         tone: "success",
