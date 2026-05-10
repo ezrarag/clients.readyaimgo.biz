@@ -29,8 +29,7 @@ export function AuthShell({
     <div className="relative isolate min-h-screen overflow-hidden">
       <PageBackdrop />
       <div className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 lg:flex-row lg:items-center lg:gap-10 lg:px-8 lg:py-10">
-        <section className="animate-fade-up relative overflow-hidden rounded-[32px] border border-white/80 bg-white/65 p-8 shadow-glow backdrop-blur-sm lg:flex-1 lg:p-10">
-          <div className="absolute right-0 top-0 h-40 w-40 rounded-full bg-orange-200/40 blur-3xl" />
+        <section className="animate-fade-up relative order-2 overflow-hidden rounded-[32px] border border-white/80 bg-white/70 p-8 shadow-glow backdrop-blur-sm lg:order-1 lg:flex-1 lg:p-10">
           <BrandMark />
           <div className="relative mt-10 max-w-xl space-y-5">
             <p className="text-xs font-semibold uppercase tracking-[0.34em] text-slate-500">
@@ -43,20 +42,22 @@ export function AuthShell({
               {asideDescription}
             </p>
           </div>
-          <div className="relative mt-8 space-y-3">
-            {highlights.map((highlight) => (
-              <div
-                key={highlight}
-                className="flex items-center gap-3 rounded-2xl border border-white/70 bg-white/70 px-4 py-3 text-sm text-slate-700"
-              >
-                <CheckCircle2 className="h-4 w-4 text-primary" />
-                <span>{highlight}</span>
-              </div>
-            ))}
-          </div>
+          {highlights.length > 0 ? (
+            <div className="relative mt-8 space-y-3">
+              {highlights.map((highlight) => (
+                <div
+                  key={highlight}
+                  className="flex items-center gap-3 rounded-2xl border border-white/70 bg-white/70 px-4 py-3 text-sm text-slate-700"
+                >
+                  <CheckCircle2 className="h-4 w-4 text-primary" />
+                  <span>{highlight}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </section>
 
-        <Card className="animate-fade-up w-full max-w-xl lg:w-[30rem]">
+        <Card className="animate-fade-up order-1 w-full max-w-xl lg:order-2 lg:w-[30rem]">
           <CardHeader className="pb-5">
             <CardTitle>{title}</CardTitle>
             <CardDescription>{description}</CardDescription>
