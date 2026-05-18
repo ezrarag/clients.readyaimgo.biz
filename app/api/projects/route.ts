@@ -272,6 +272,10 @@ export async function POST(request: NextRequest) {
     const status = parseProjectStatus(body.status)
     const deliverables = normalizeProjectDeliverables(body.deliverables)
     const cohort = normalizeProjectCohort(body.cohort)
+    const workspaceId =
+      typeof body.workspaceId === "string" && body.workspaceId.trim()
+        ? body.workspaceId.trim()
+        : null
     const sourceBusiness =
       typeof body.sourceBusiness === "string" && body.sourceBusiness.trim()
         ? body.sourceBusiness.trim()
@@ -349,6 +353,7 @@ export async function POST(request: NextRequest) {
       .doc(projectDocId)
       .set({
         clientName,
+        workspaceId,
         clientId,
         ragProjectLead,
         beamParticipantLead,

@@ -1,21 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
-import Stripe from "stripe"
 
 import { isClientAllowed, resolvePortalIdentity } from "@/lib/portal-auth"
+import { createStripeServer, getStripeAppUrl, stripeRouteError } from "@/lib/stripe-server"
 
 // Lazy initialization to avoid build-time errors
-let stripeInstance: Stripe | null = null
+let stripeInstance: ReturnType<typeof createStripeServer> | null = null
 
-const getStripe = (): Stripe => {
+const getStripe = () => {
   if (!stripeInstance) {
-    const secretKey = process.env.STRIPE_SECRET_KEY
-    if (!secretKey) {
-      throw new Error("STRIPE_SECRET_KEY is not set")
-    }
-    stripeInstance = new Stripe(secretKey, {
-      apiVersion: "2025-02-24.acacia",
-      typescript: true,
-    })
+    stripeInstance = createStripeServer()
   }
   return stripeInstance
 }
@@ -40,10 +33,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Get Stripe product/price IDs from environment variables
-    // Default to test mode product IDs if not set
-    const priceId = process.env.STRIPE_PRICE_ID || "price_test_default"
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
+    const priceId = process.env.STRIPE_PRICE_ID?.trim()
+    if (!priceId || priceId === "price_test_default") {
+      return NextResponse.json(
+        { error: "Stripe subscription price is not configured." },
+        { status: 503 }
+      )
+    }
+    const appUrl = getStripeAppUrl(request)
 
     // Create or retrieve Stripe customer
     const stripe = getStripe()
@@ -69,7 +66,6 @@ export async function POST(request: NextRequest) {
     // Create checkout session
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
-      payment_method_types: ["card"],
       line_items: [
         {
           price: priceId,
@@ -87,11 +83,8 @@ export async function POST(request: NextRequest) {
     })
 
     return NextResponse.json({ url: session.url })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error creating checkout session:", error)
-    return NextResponse.json(
-      { error: error.message || "Failed to create checkout session" },
-      { status: 500 }
-    )
+    return stripeRouteError(error, "Failed to create checkout session")
   }
 }

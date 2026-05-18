@@ -1,19 +1,72 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+
     function signedIn() {
       return request.auth != null;
     }
 
+    // ── Legacy org membership ─────────────────────────────────────────────────
     function isOrgMember(orgId) {
       return signedIn() &&
-        firestore.exists(/databases/(default)/documents/organizations/$(orgId)/members/$(request.auth.uid));
+        firestore.exists(
+          /databases/(default)/documents/organizations/$(orgId)/members/$(request.auth.uid)
+        );
     }
 
+    // ── Workspace membership ──────────────────────────────────────────────────
+    function isWorkspaceMember(workspaceId) {
+      return signedIn() &&
+        firestore.exists(
+          /databases/(default)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)
+        );
+    }
+
+    function workspaceRole(workspaceId) {
+      return firestore.get(
+        /databases/(default)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)
+      ).data.role;
+    }
+
+    function isWorkspaceManager(workspaceId) {
+      return isWorkspaceMember(workspaceId) &&
+        workspaceRole(workspaceId) in ['owner', 'manager'];
+    }
+
+    // Legacy org file storage (unchanged)
     match /org-files/{orgId}/{projectSegment}/{fileName} {
       allow read, write: if isOrgMember(orgId);
     }
 
+    // Workspace file storage
+    // Path: workspace-files/{workspaceId}/contracts/{fileName}
+    //
+    // Security properties:
+    //   - read  : any workspace member
+    //   - create: any workspace member, subject to:
+    //               • max 50 MB per file
+    //               • MIME type must be a recognised document format
+    //   - delete: managers/owners only
+    //   - update: blocked to prevent object overwrites
+    match /workspace-files/{workspaceId}/{allPaths=**} {
+      allow read: if isWorkspaceMember(workspaceId);
+
+      allow create: if isWorkspaceMember(workspaceId)
+        && request.resource.size <= 50 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('application/pdf')
+          || request.resource.contentType.matches('application/msword')
+          || request.resource.contentType.matches('application/vnd\\.openxmlformats-officedocument\\..*')
+          || request.resource.contentType.matches('application/vnd\\.ms-(excel|powerpoint|word)')
+          || request.resource.contentType.matches('application/vnd\\.oasis\\.opendocument\\..*')
+          || request.resource.contentType.matches('text/(plain|csv)')
+        );
+
+      allow update: if false;
+      allow delete: if isWorkspaceManager(workspaceId);
+    }
+
+    // Deny everything else
     match /{allPaths=**} {
       allow read, write: if false;
     }

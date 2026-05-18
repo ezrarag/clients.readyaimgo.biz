@@ -1,4 +1,10 @@
-export type UserRole = "owner" | "collaborator" | "admin"
+export type UserRole =
+  | "owner"
+  | "developer"
+  | "collaborator"
+  | "employee-of-client"
+  | "beam-participant"
+  | "admin"
 export type MembershipStatus = "active" | "suspended" | "pending"
 
 export interface ClientMembership {
@@ -100,6 +106,27 @@ export function contractFromUserDoc(
     }
   }
 
+  // Handle users with clientIds but no memberships (e.g., self-associated)
+  if (rawClientIds && rawClientIds.length > 0) {
+    const memberships: Record<string, ClientMembership> = {}
+    for (const clientId of rawClientIds) {
+      memberships[clientId] = {
+        role: "owner",
+        status: "active",
+        createdAt: now(),
+        updatedAt: now(),
+      }
+    }
+
+    const activeClientId = pickActiveClientId(rawClientIds, preferredClientId)
+    return {
+      clientIds: rawClientIds,
+      memberships,
+      activeClientId,
+      userRole: "owner",
+    }
+  }
+
   return null
 }
 
@@ -113,7 +140,14 @@ function pickActiveClientId(clientIds: string[], preferred?: string | null) {
 }
 
 function isUserRole(value: unknown): value is UserRole {
-  return value === "owner" || value === "collaborator" || value === "admin"
+  return (
+    value === "owner" ||
+    value === "developer" ||
+    value === "collaborator" ||
+    value === "employee-of-client" ||
+    value === "beam-participant" ||
+    value === "admin"
+  )
 }
 
 function isMembershipStatus(value: unknown): value is MembershipStatus {

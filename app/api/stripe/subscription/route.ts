@@ -1,19 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
-import Stripe from "stripe"
+import { createStripeServer, stripeRouteError } from "@/lib/stripe-server"
 
 // Lazy initialization to avoid build-time errors
-let stripeInstance: Stripe | null = null
+let stripeInstance: ReturnType<typeof createStripeServer> | null = null
 
-const getStripe = (): Stripe => {
+const getStripe = () => {
   if (!stripeInstance) {
-    const secretKey = process.env.STRIPE_SECRET_KEY
-    if (!secretKey) {
-      throw new Error("STRIPE_SECRET_KEY is not set")
-    }
-    stripeInstance = new Stripe(secretKey, {
-      apiVersion: "2025-02-24.acacia",
-      typescript: true,
-    })
+    stripeInstance = createStripeServer()
   }
   return stripeInstance
 }
@@ -48,9 +41,8 @@ export async function GET(request: NextRequest) {
       status: subscription.status,
       stripeCustomerId: customerId,
     })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error fetching subscription:", error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return stripeRouteError(error, "Unable to fetch subscription.")
   }
 }
-

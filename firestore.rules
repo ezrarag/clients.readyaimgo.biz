@@ -17,6 +17,8 @@ service cloud.firestore {
           .data.roles.hasAny(['beam-admin']);
     }
 
+    // ── Legacy org helpers ────────────────────────────────────────────────────
+
     function isMember(orgId) {
       return signedIn() &&
         exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid));
@@ -34,6 +36,30 @@ service cloud.firestore {
           .data.role == 'owner';
     }
 
+    // ── Workspace helpers ─────────────────────────────────────────────────────
+
+    function isWorkspaceMember(workspaceId) {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid));
+    }
+
+    function workspaceMemberRole(workspaceId) {
+      return get(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid))
+        .data.role;
+    }
+
+    function isWorkspaceManager(workspaceId) {
+      return isWorkspaceMember(workspaceId) &&
+        workspaceMemberRole(workspaceId) in ['owner', 'manager'];
+    }
+
+    function isWorkspaceOwner(workspaceId) {
+      return isWorkspaceMember(workspaceId) &&
+        workspaceMemberRole(workspaceId) == 'owner';
+    }
+
+    // ── Collections ───────────────────────────────────────────────────────────
+
     match /users/{uid} {
       allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow write: if signedIn() && request.auth.uid == uid;
@@ -45,6 +71,7 @@ service cloud.firestore {
       allow update: if ownsEmailDoc(email) || isAdmin();
     }
 
+    // Legacy org structure (unchanged)
     match /organizations/{orgId} {
       allow read: if isMember(orgId) || isAdmin();
       allow create: if signedIn();
@@ -70,6 +97,33 @@ service cloud.firestore {
       match /invites/{inviteId} {
         allow read: if isOrgAdmin(orgId) || isAdmin();
         allow write: if isOrgAdmin(orgId) || isAdmin();
+      }
+    }
+
+    // Workspace structure
+    match /workspaces/{workspaceId} {
+      allow read: if isWorkspaceMember(workspaceId) || isAdmin();
+      allow create: if signedIn();
+      allow update: if isWorkspaceManager(workspaceId) || isAdmin();
+      allow delete: if isWorkspaceOwner(workspaceId) || isAdmin();
+
+      match /members/{uid} {
+        allow read: if isWorkspaceMember(workspaceId) || isAdmin();
+        // Managers can write member docs; owners can do anything
+        allow write: if isWorkspaceManager(workspaceId) || isAdmin();
+      }
+
+      match /pendingInvites/{email} {
+        allow read: if isWorkspaceManager(workspaceId) || isAdmin();
+        allow write: if isWorkspaceManager(workspaceId) || isAdmin();
+      }
+
+      // File metadata — written by any member after a Storage upload,
+      // deleted only by managers/owners (mirrors Storage write rules).
+      match /files/{fileId} {
+        allow read: if isWorkspaceMember(workspaceId) || isAdmin();
+        allow create: if isWorkspaceMember(workspaceId) || isAdmin();
+        allow update, delete: if isWorkspaceManager(workspaceId) || isAdmin();
       }
     }
 

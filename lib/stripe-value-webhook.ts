@@ -1,8 +1,13 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { FieldValue } from "firebase-admin/firestore"
-import Stripe from "stripe"
+import type Stripe from "stripe"
 
 import { getAdminDb } from "@/lib/firebase-admin"
+import {
+  createStripeServer,
+  getStripeWebhookSecret,
+  stripeRouteError,
+} from "@/lib/stripe-server"
 import {
   VALUE_PROFILE_COLLECTION,
   VALUE_PROFILE_PAYMENTS_COLLECTION,
@@ -14,30 +19,14 @@ import {
   uniqueStrings,
 } from "@/lib/value-profile"
 
-let stripeInstance: Stripe | null = null
+let stripeInstance: ReturnType<typeof createStripeServer> | null = null
 
 function getStripe() {
   if (!stripeInstance) {
-    const secretKey = process.env.STRIPE_SECRET_KEY
-    if (!secretKey) {
-      throw new Error("STRIPE_SECRET_KEY is not set.")
-    }
-
-    stripeInstance = new Stripe(secretKey, {
-      apiVersion: "2025-02-24.acacia",
-      typescript: true,
-    })
+    stripeInstance = createStripeServer()
   }
 
   return stripeInstance
-}
-
-function getWebhookSecret() {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET
-  if (!secret) {
-    throw new Error("STRIPE_WEBHOOK_SECRET is not set.")
-  }
-  return secret
 }
 
 function getValueProfileRef(db: FirebaseFirestore.Firestore, clientId: string) {
@@ -113,6 +102,9 @@ async function handleValueProfileCheckoutCompleted(session: Stripe.Checkout.Sess
     console.warn("Value profile payment missing clientId metadata:", session.id)
     return
   }
+
+  // workspaceId is present when the payment was initiated from a workspace tab.
+  const workspaceId = session.metadata?.workspaceId?.trim() || null
 
   const db = getAdminDb()
   const profileRef = getValueProfileRef(db, clientId)
@@ -195,6 +187,8 @@ async function handleValueProfileCheckoutCompleted(session: Stripe.Checkout.Sess
         null,
       stripeCheckoutSessionId: session.id,
       stripePaymentIntentId: paymentIntentId ?? null,
+      // Write workspaceId when present so workspace-scoped queries can find it.
+      ...(workspaceId ? { workspaceId } : {}),
       createdAt: FieldValue.serverTimestamp(),
     })
 
@@ -227,6 +221,8 @@ async function handleDeliverableCheckoutCompleted(session: Stripe.Checkout.Sessi
     console.warn("Deliverable payment missing metadata:", session.id)
     return
   }
+
+  const workspaceId = session.metadata?.workspaceId?.trim() || null
 
   const db = getAdminDb()
   const deliverableRef = db
@@ -293,6 +289,8 @@ async function handleDeliverableCheckoutCompleted(session: Stripe.Checkout.Sessi
       stripeCheckoutSessionId: session.id,
       stripePaymentIntentId: paymentIntentId ?? null,
       deliverableId,
+      // Propagate workspaceId so the workspace payments tab can surface this.
+      ...(workspaceId ? { workspaceId } : {}),
     })
   }
 }
@@ -370,10 +368,10 @@ export async function handleStripeWebhook(request: NextRequest) {
 
   let event: Stripe.Event
   try {
-    event = getStripe().webhooks.constructEvent(body, signature, getWebhookSecret())
+    event = getStripe().webhooks.constructEvent(body, signature, getStripeWebhookSecret())
   } catch (error) {
     console.error("Webhook signature verification failed:", error)
-    return NextResponse.json({ error: "Webhook Error" }, { status: 400 })
+    return stripeRouteError(error, "Webhook signature verification failed.")
   }
 
   try {
@@ -403,6 +401,6 @@ export async function handleStripeWebhook(request: NextRequest) {
     return NextResponse.json({ received: true })
   } catch (error) {
     console.error("Error processing Stripe webhook:", error)
-    return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 })
+    return stripeRouteError(error, "Webhook processing failed")
   }
 }

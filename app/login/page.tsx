@@ -19,6 +19,7 @@ import {
 } from "@/lib/client-onboarding"
 import { resolveClientDestination } from "@/lib/client-portal"
 import { ensureBeamUserRecord } from "@/lib/beam-users-client"
+import { doc, serverTimestamp, setDoc } from "firebase/firestore"
 import { getDb } from "@/lib/firebase/config"
 import { signIn, signInWithGoogle } from "@/lib/firebase/auth"
 
@@ -185,6 +186,24 @@ function LoginPageContent() {
     })
 
     if (!handoffPayload) {
+      // No handoff context — still ensure a minimal clients/{email} doc exists
+      // so the org resolve route can find/create an org for this user.
+      // Without this, Google-only sign-ins have no client doc and the org
+      // resolution falls all the way through to /dashboard.
+      if (accountUser.email) {
+        const emailKey = accountUser.email.toLowerCase().trim()
+        await setDoc(
+          doc(firestoreDb, "clients", emailKey),
+          {
+            uid: accountUser.uid,
+            email: emailKey,
+            name: accountUser.displayName || "",
+            createdAt: serverTimestamp(),
+            lastLoginAt: serverTimestamp(),
+          },
+          { merge: true }
+        )
+      }
       return
     }
 

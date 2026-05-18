@@ -1,10 +1,49 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { FieldValue } from "firebase-admin/firestore"
 
-import { getAdminDb } from "@/lib/firebase-admin"
-import { resolvePortalIdentity } from "@/lib/portal-auth"
+import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
+import { CLIENT_SERVICE_OPTIONS } from "@/lib/client-onboarding"
+import { emailToDocId, getBearerToken, resolvePortalIdentity } from "@/lib/portal-auth"
 
 export const dynamic = "force-dynamic"
+
+const CLIENT_SERVICE_OPTION_SET = new Set<string>(
+  CLIENT_SERVICE_OPTIONS.map((option) => option.id)
+)
+
+function readProfileString(body: Record<string, unknown>, fieldName: string) {
+  if (!(fieldName in body)) {
+    return undefined
+  }
+
+  return typeof body[fieldName] === "string" ? body[fieldName].trim() : ""
+}
+
+function readServiceInterests(value: unknown) {
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error("serviceInterests must be an array.")
+  }
+
+  const normalized = Array.from(
+    new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  )
+  const invalid = normalized.filter((item) => !CLIENT_SERVICE_OPTION_SET.has(item))
+
+  if (invalid.length > 0) {
+    throw new Error(`Unsupported serviceInterests: ${invalid.join(", ")}`)
+  }
+
+  return normalized
+}
 
 function serializeClient(id: string, data: Record<string, unknown>) {
   return {
@@ -70,6 +109,29 @@ async function loadClient(clientId: string) {
   )
 }
 
+async function getUnavailableReason(request: NextRequest) {
+  try {
+    const token = getBearerToken(request)
+    if (!token) return "unassociated"
+
+    const decodedToken = await getAdminAuth().verifyIdToken(token)
+    const email = decodedToken.email?.trim().toLowerCase()
+    if (!email) return "unassociated"
+
+    const allowlistSnapshot = await getAdminDb()
+      .collection("ragAllowlist")
+      .doc(emailToDocId(email))
+      .get()
+
+    return allowlistSnapshot.exists &&
+      ((allowlistSnapshot.data() ?? {}) as Record<string, unknown>).active === false
+      ? "revoked"
+      : "unassociated"
+  } catch {
+    return "unassociated"
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const identity = await resolvePortalIdentity(
@@ -78,7 +140,10 @@ export async function GET(request: NextRequest) {
     )
 
     if (!identity) {
-      return NextResponse.json({ error: "Portal access unavailable." }, { status: 403 })
+      return NextResponse.json(
+        { error: "Portal access unavailable.", reason: await getUnavailableReason(request) },
+        { status: 403 }
+      )
     }
 
     return NextResponse.json({
@@ -109,19 +174,60 @@ export async function PATCH(request: NextRequest) {
     }
 
     const body = (await request.json()) as Record<string, unknown>
-    const name = typeof body.name === "string" ? body.name.trim() : null
+    const name = readProfileString(body, "name")
 
-    if (!name) {
+    if ("name" in body && !name) {
       return NextResponse.json({ error: "name is required." }, { status: 400 })
     }
 
-    await getAdminDb().collection("clients").doc(identity.activeClientId).set(
-      {
-        name,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    )
+    const updates: Record<string, unknown> = {}
+    const profileFields = [
+      "companyName",
+      "contactTitle",
+      "phone",
+      "organizationType",
+      "onboardingNotes",
+    ]
+
+    if (name !== undefined) {
+      updates.name = name
+    }
+
+    for (const fieldName of profileFields) {
+      const value = readProfileString(body, fieldName)
+      if (value !== undefined) {
+        updates[fieldName] = value
+      }
+    }
+
+    try {
+      const serviceInterests = readServiceInterests(body.serviceInterests)
+      if (serviceInterests !== undefined) {
+        updates.serviceInterests = serviceInterests
+      }
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Invalid serviceInterests." },
+        { status: 400 }
+      )
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await getAdminDb().collection("clients").doc(identity.activeClientId).set(
+        {
+          ...updates,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+    } else {
+      await getAdminDb().collection("clients").doc(identity.activeClientId).set(
+        {
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+    }
 
     return NextResponse.json({
       success: true,

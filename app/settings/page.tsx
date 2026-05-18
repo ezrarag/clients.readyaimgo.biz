@@ -10,6 +10,18 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  CLIENT_SERVICE_OPTIONS,
+  type ClientServiceInterestKey,
+} from "@/lib/client-onboarding"
 import { signOut } from "@/lib/firebase/auth"
 import { Client } from "@/types"
 
@@ -20,14 +32,50 @@ type SaveState =
     }
   | null
 
+const ORGANIZATION_TYPES = [
+  "Transportation",
+  "Property operations",
+  "Retail",
+  "Hospitality",
+  "Professional services",
+  "Community organization",
+  "Real estate",
+  "Construction",
+  "Other",
+]
+
 export default function SettingsPage() {
-  const { user, activeClientId, loading: authLoading } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const router = useRouter()
   const [client, setClient] = useState<Client | null>(null)
   const [name, setName] = useState("")
+  const [companyName, setCompanyName] = useState("")
+  const [contactTitle, setContactTitle] = useState("")
+  const [phone, setPhone] = useState("")
+  const [organizationType, setOrganizationType] = useState("")
+  const [serviceInterests, setServiceInterests] = useState<ClientServiceInterestKey[]>([])
+  const [onboardingNotes, setOnboardingNotes] = useState("")
   const [pageLoading, setPageLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saveState, setSaveState] = useState<SaveState>(null)
+
+  const applyClientState = (clientData: Client) => {
+    setClient(clientData)
+    setName(clientData.name)
+    setCompanyName(clientData.companyName || "")
+    setContactTitle(clientData.contactTitle || "")
+    setPhone(clientData.phone || "")
+    setOrganizationType(clientData.organizationType || "")
+    setServiceInterests(
+      Array.isArray(clientData.serviceInterests)
+        ? clientData.serviceInterests.filter(
+            (value): value is ClientServiceInterestKey =>
+              CLIENT_SERVICE_OPTIONS.some((option) => option.id === value)
+          )
+        : []
+    )
+    setOnboardingNotes(clientData.onboardingNotes || "")
+  }
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -39,10 +87,10 @@ export default function SettingsPage() {
     if (user) {
       loadClientData()
     }
-  }, [activeClientId, user])
+  }, [user])
 
   const loadClientData = async () => {
-    if (!user || !activeClientId) {
+    if (!user) {
       setPageLoading(false)
       return
     }
@@ -67,18 +115,27 @@ export default function SettingsPage() {
         }
 
         const clientData: Client = {
-          uid: docData.uid || activeClientId,
+          uid: docData.uid || user.uid,
           name: docData.name || "",
           email: docData.email || user.email || "",
           beamCoinBalance: docData.beamCoinBalance || 0,
           housingWalletBalance: docData.housingWalletBalance || 0,
           stripeCustomerId: docData.stripeCustomerId,
           planType: docData.planType,
+          companyName: docData.companyName || "",
+          contactTitle: docData.contactTitle || "",
+          phone: docData.phone || "",
+          organizationType: docData.organizationType || "",
+          serviceInterests: Array.isArray(docData.serviceInterests)
+            ? docData.serviceInterests.filter(
+                (value: unknown): value is string => typeof value === "string"
+              )
+            : [],
+          onboardingNotes: docData.onboardingNotes || "",
           createdAt: docData.createdAt as Date | undefined,
         }
 
-        setClient(clientData)
-        setName(clientData.name)
+        applyClientState(clientData)
       }
     } catch (error) {
       console.error("Error loading client data:", error)
@@ -101,7 +158,15 @@ export default function SettingsPage() {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({
+          name,
+          companyName,
+          contactTitle,
+          phone,
+          organizationType,
+          serviceInterests,
+          onboardingNotes,
+        }),
       })
 
       if (!response.ok) {
@@ -111,7 +176,21 @@ export default function SettingsPage() {
         throw new Error(payload?.error || "Unable to save settings right now.")
       }
 
-      setClient({ ...client, name })
+      const payload = (await response.json()) as {
+        client?: Partial<Client> | null
+      }
+      const nextClient: Client = {
+        ...client,
+        ...(payload.client || {}),
+        uid: payload.client?.uid || client.uid,
+        email: payload.client?.email || client.email,
+        name: payload.client?.name || name,
+        beamCoinBalance: payload.client?.beamCoinBalance ?? client.beamCoinBalance,
+        housingWalletBalance:
+          payload.client?.housingWalletBalance ?? client.housingWalletBalance,
+      }
+
+      applyClientState(nextClient)
       setSaveState({
         tone: "success",
         text: "Account settings saved successfully.",
@@ -150,7 +229,7 @@ export default function SettingsPage() {
       description="Keep profile details current and manage the account actions that apply across the client workspace."
       eyebrow="Preferences"
       nav={[
-        { href: "/dashboard", label: "Dashboard" },
+        { href: "/dashboard", label: "Workspaces" },
         { href: "/settings", label: "Settings", active: true },
       ]}
       actions={
@@ -227,11 +306,120 @@ export default function SettingsPage() {
                 variant="outline"
                 onClick={() => {
                   setName(client.name)
+                  setCompanyName(client.companyName || "")
+                  setContactTitle(client.contactTitle || "")
+                  setPhone(client.phone || "")
+                  setOrganizationType(client.organizationType || "")
+                  setServiceInterests(
+                    Array.isArray(client.serviceInterests)
+                      ? client.serviceInterests.filter(
+                          (value): value is ClientServiceInterestKey =>
+                            CLIENT_SERVICE_OPTIONS.some((option) => option.id === value)
+                        )
+                      : []
+                  )
+                  setOnboardingNotes(client.onboardingNotes || "")
                   setSaveState(null)
                 }}
               >
                 Reset
               </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="xl:col-span-2">
+          <CardHeader>
+            <CardTitle>Business Profile</CardTitle>
+            <CardDescription>
+              Optional details that help shape your client workspace and future service expansion.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-5 lg:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-slate-700">Company name</label>
+              <Input
+                value={companyName}
+                onChange={(event) => setCompanyName(event.target.value)}
+                placeholder="Business or organization name"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-slate-700">Role or title</label>
+              <Input
+                value={contactTitle}
+                onChange={(event) => setContactTitle(event.target.value)}
+                placeholder="Owner, founder, operations lead..."
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-slate-700">Phone</label>
+              <Input
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder="Best contact number"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-slate-700">Organization type</label>
+              <Select
+                value={organizationType || "none"}
+                onValueChange={(value) => setOrganizationType(value === "none" ? "" : value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select an organization type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not selected</SelectItem>
+                  {ORGANIZATION_TYPES.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-3 lg:col-span-2">
+              <label className="text-sm font-semibold text-slate-700">Service interests</label>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {CLIENT_SERVICE_OPTIONS.map((option) => {
+                  const checked = serviceInterests.includes(option.id)
+
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() =>
+                        setServiceInterests((current) =>
+                          checked
+                            ? current.filter((value) => value !== option.id)
+                            : [...current, option.id]
+                        )
+                      }
+                      className={`rounded-2xl border px-4 py-3 text-left text-sm transition ${
+                        checked
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border/80 bg-white/80 text-slate-700 hover:border-primary/50"
+                      }`}
+                    >
+                      <span className="font-semibold">{option.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2 lg:col-span-2">
+              <label className="text-sm font-semibold text-slate-700">Expansion notes</label>
+              <Textarea
+                value={onboardingNotes}
+                onChange={(event) => setOnboardingNotes(event.target.value)}
+                placeholder="Optional context, goals, or future services you want ReadyAimGo to understand."
+              />
             </div>
           </CardContent>
         </Card>

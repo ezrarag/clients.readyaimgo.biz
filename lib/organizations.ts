@@ -58,6 +58,22 @@ export interface OrgMember {
   invitedBy: string | null
 }
 
+export interface OrgProjectRepository {
+  /** GitHub repo URL, e.g. https://github.com/owner/repo */
+  url: string
+  /** owner/repo */
+  fullName: string
+  /** Live deployment / preview URL */
+  deploymentUrl: string | null
+  /** Vercel project ID when linked via Vercel */
+  vercelProjectId: string | null
+  /** Vercel project name */
+  vercelProjectName: string | null
+  /** uid of the member who linked it */
+  linkedByUid: string | null
+  linkedAt: string | null
+}
+
 export interface OrgProject {
   id: string
   name: string
@@ -68,6 +84,8 @@ export interface OrgProject {
   ragLeadEmail: string
   createdAt: string | null
   tasks: OrgTask[]
+  /** Attached GitHub / Vercel project */
+  repository: OrgProjectRepository | null
 }
 
 export interface OrgFile {
@@ -251,6 +269,21 @@ export function normalizeOrgMember(
   }
 }
 
+function normalizeOrgProjectRepository(raw: unknown): OrgProjectRepository | null {
+  if (!isRecord(raw)) return null
+  const url = readString(raw.url)
+  if (!url) return null
+  return {
+    url,
+    fullName: readString(raw.fullName, url),
+    deploymentUrl: isRecord(raw) && typeof raw.deploymentUrl === "string" ? raw.deploymentUrl : null,
+    vercelProjectId: isRecord(raw) && typeof raw.vercelProjectId === "string" ? raw.vercelProjectId : null,
+    vercelProjectName: isRecord(raw) && typeof raw.vercelProjectName === "string" ? raw.vercelProjectName : null,
+    linkedByUid: isRecord(raw) && typeof raw.linkedByUid === "string" ? raw.linkedByUid : null,
+    linkedAt: serializeTimestamp(isRecord(raw) ? raw.linkedAt : null),
+  }
+}
+
 export function normalizeOrgProject(
   id: string,
   data: Record<string, unknown>
@@ -265,6 +298,7 @@ export function normalizeOrgProject(
     ragLeadEmail: readString(data.ragLeadEmail),
     createdAt: serializeTimestamp(data.createdAt),
     tasks: normalizeOrgTasks(data.tasks),
+    repository: normalizeOrgProjectRepository(data.repository),
   }
 }
 

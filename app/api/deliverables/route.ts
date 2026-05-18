@@ -134,6 +134,7 @@ export async function POST(request: NextRequest) {
     const screenRecordingUrl =
       typeof body.screenRecordingUrl === "string" ? body.screenRecordingUrl.trim() : ""
     const projectId = typeof body.projectId === "string" ? body.projectId.trim() : ""
+    const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId.trim() : ""
     const screenshotUrls = normalizeUrlList(body.screenshotUrls)
     const amount = parseDollarAmount(body.amount)
 
@@ -157,6 +158,7 @@ export async function POST(request: NextRequest) {
 
     await deliverableRef.set({
       clientId,
+      workspaceId: workspaceId || null,
       projectId: projectId || null,
       title,
       description,

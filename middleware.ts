@@ -1,23 +1,19 @@
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 
-const PUBLIC_PATHS = ["/login", "/signup", "/join", "/no-access", "/api/"]
-
+/**
+ * Middleware is intentionally minimal.
+ *
+ * Firebase stores auth tokens in IndexedDB (not HTTP cookies), so there is no
+ * reliable way to gate routes here without a full server-side session-cookie
+ * setup. Authentication enforcement is handled client-side by AuthProvider
+ * (onAuthStateChanged → redirect to /login) and server-side inside each API
+ * route via getBearerToken / getAdminAuth().verifyIdToken().
+ */
 export function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl
-
-  // Always allow public paths and static assets.
-  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p)) || pathname.startsWith("/_next")) {
-    return NextResponse.next()
-  }
-
-  // The deep revocation check runs in server resolvers that can verify the
-  // Firebase ID token and read ragAllowlist without exposing it to the browser.
   return NextResponse.next()
 }
 
 export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico).*)",
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 }

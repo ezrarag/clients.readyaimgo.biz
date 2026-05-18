@@ -44,6 +44,7 @@ export interface ProjectCohortMember {
 
 export interface BeamProject {
   id: string
+  workspaceId?: string | null
   clientName: string
   clientId: string
   ragProjectLead: string
@@ -369,6 +370,10 @@ export function normalizeBeamProjectDocument(
 
   return {
     id,
+    workspaceId:
+      typeof value.workspaceId === "string" && value.workspaceId.trim()
+        ? value.workspaceId.trim()
+        : null,
     clientName: typeof value.clientName === "string" ? value.clientName : "",
     clientId: typeof value.clientId === "string" ? value.clientId : id,
     ragProjectLead: typeof value.ragProjectLead === "string" ? value.ragProjectLead : "",

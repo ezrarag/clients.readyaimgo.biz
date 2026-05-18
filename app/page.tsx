@@ -39,14 +39,14 @@ const workspaceCards = [
 ]
 
 export default function Home() {
-  const { user, loading } = useAuth()
+  const { user, workspaceIds, loading } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
     if (!loading && user) {
-      router.push("/dashboard")
+      router.push(workspaceIds.length > 0 ? "/dashboard" : "/claim-workspace")
     }
-  }, [loading, router, user])
+  }, [loading, router, user, workspaceIds.length])
 
   if (loading) {
     return (

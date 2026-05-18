@@ -7,6 +7,7 @@ export type DeliverableStatus = (typeof DELIVERABLE_STATUSES)[number]
 export interface ClientDeliverable {
   id: string
   clientId: string
+  workspaceId?: string | null
   projectId?: string | null
   title: string
   description: string
@@ -60,6 +61,10 @@ export function normalizeClientDeliverableDocument(
       typeof value.clientId === "string" && value.clientId.trim()
         ? value.clientId.trim().toLowerCase()
         : fallbackClientId,
+    workspaceId:
+      typeof value.workspaceId === "string" && value.workspaceId.trim()
+        ? value.workspaceId.trim()
+        : null,
     projectId:
       typeof value.projectId === "string" && value.projectId.trim()
         ? value.projectId.trim()

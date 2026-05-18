@@ -1,477 +1,288 @@
 "use client"
 
-import { Suspense, useEffect, useState } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
-import { format } from "date-fns"
+import { useEffect, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 import {
-  AlertCircle,
-  ArrowUp,
-  Calendar,
-  Coins,
-  CreditCard,
+  ExternalLink,
+  Github,
   Loader2,
   LogOut,
-  RefreshCw,
-  ShieldPlus,
-  UserRound,
-  Wallet,
+  Plus,
+  Server,
+  Users,
 } from "lucide-react"
-import { collection, getDocs, orderBy, query, where } from "firebase/firestore"
 
 import { useAuth } from "@/components/auth/AuthProvider"
-import { RagNotesFeed } from "@/components/rag-notes-feed"
 import { AppShell } from "@/components/site/app-shell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { GlobalWorkspaceNotifier } from "@/components/workspace/GlobalWorkspaceNotifier"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { hasAnyRole } from "@/lib/beam"
-import { resolveClientDestination } from "@/lib/client-portal"
-import { CLIENT_SERVICE_OPTIONS } from "@/lib/client-onboarding"
 import { signOut } from "@/lib/firebase/auth"
-import { getDb } from "@/lib/firebase/config"
-import { Client, HousingWallet, Subscription, Transaction } from "@/types"
+import type { Workspace } from "@/lib/workspaces"
 
-interface BeamTransaction {
-  amount?: number
-  description?: string
-  timestamp?: string
-  type: "earn" | "spend"
+function cleanString(value: string | null | undefined) {
+  return typeof value === "string" ? value.trim() : ""
 }
 
-type StatusMessage =
-  | {
-      tone: "success" | "warning" | "danger"
-      text: string
-    }
-  | null
+function domainFromUrl(value: string | null | undefined) {
+  const text = cleanString(value).toLowerCase()
+  if (!text) return ""
+  try {
+    return new URL(text.startsWith("http") ? text : `https://${text}`).hostname.replace(
+      /^www\./,
+      ""
+    )
+  } catch {
+    return text.replace(/^https?:\/\//, "").split("/")[0]?.replace(/^www\./, "") ?? ""
+  }
+}
 
-const currencyFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-})
+function isLikelyDefaultVercelUrl(value: string | null | undefined) {
+  const domain = domainFromUrl(value)
+  return domain.endsWith(".vercel.app")
+}
 
-function DashboardPageContent() {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const { user, effectiveRoles, activeClientId, loading: authLoading } = useAuth()
+function resolvePrimaryDomain(workspace: Workspace) {
+  const directDomain =
+    cleanString(workspace.primaryDomain) ||
+    cleanString(workspace.targetDomain)
+  if (directDomain) return domainFromUrl(directDomain)
 
-  const [client, setClient] = useState<Client | null>(null)
-  const [subscription, setSubscription] = useState<Subscription | null>(null)
-  const [housingWallet, setHousingWallet] = useState<HousingWallet | null>(null)
-  const [transactions, setTransactions] = useState<Transaction[]>([])
-  const [beamCoinBalance, setBeamCoinBalance] = useState<number | null>(null)
-  const [beamCoinTransactions, setBeamCoinTransactions] = useState<BeamTransaction[]>([])
-  const [beamCoinLoading, setBeamCoinLoading] = useState(false)
-  const [beamCoinError, setBeamCoinError] = useState<string | null>(null)
-  const [pageLoading, setPageLoading] = useState(true)
-  const [redeemOpen, setRedeemOpen] = useState(false)
-  const [redeemAmount, setRedeemAmount] = useState("")
-  const [redeeming, setRedeeming] = useState(false)
-  const [statusMessage, setStatusMessage] = useState<StatusMessage>(null)
+  const registrarDomain = workspace.hosting.domainRegistrars.find((record) =>
+    cleanString(record.domain)
+  )?.domain
+  if (registrarDomain) return domainFromUrl(registrarDomain)
 
-  const marketingSiteUrl = (
-    process.env.NEXT_PUBLIC_MARKETING_SITE_URL || "https://readyaimgo.biz"
-  ).replace(/\/$/, "")
+  const dnsTarget = workspace.hosting.manualDnsTargets.find(
+    (target) => cleanString(target.value) || cleanString(target.host)
+  )
+  if (dnsTarget) {
+    const host = cleanString(dnsTarget.host)
+    return domainFromUrl(host.includes(".") ? host : dnsTarget.value || host)
+  }
 
-  const isBeamAdmin = effectiveRoles.includes("beam-admin")
-  const hasStaffWorkspace = hasAnyRole(effectiveRoles, [
-    "beam-admin",
-    "rag-lead",
-    "ngo-coordinator",
-    "client-manager",
-  ])
-  const viewAsParticipant =
-    isBeamAdmin && searchParams.get("viewAs") === "participant"
-  const viewerRoles = viewAsParticipant ? ["participant"] : effectiveRoles
-  const showParticipantExperience = Boolean(client) && (!hasStaffWorkspace || viewAsParticipant)
+  const vercelDomain = workspace.vercelProjects
+    .flatMap((project) => project.domains ?? [])
+    .find((domain) => cleanString(domain))
+  if (vercelDomain) return domainFromUrl(vercelDomain)
+
+  const staticHostUrl = workspace.hosting.staticHosts.find((host) =>
+    cleanString(host.productionUrl)
+  )?.productionUrl
+  if (staticHostUrl) return domainFromUrl(staticHostUrl)
+
+  const customVercelUrl = workspace.vercelProjects
+    .map((project) => project.url)
+    .find((url) => cleanString(url) && !isLikelyDefaultVercelUrl(url))
+  return customVercelUrl ? domainFromUrl(customVercelUrl) : ""
+}
+
+function resolveWorkspaceDisplayName(workspace: Workspace) {
+  const canonicalName =
+    cleanString(workspace.workspaceName) ||
+    cleanString(workspace.businessName) ||
+    cleanString(workspace.clientBusinessName)
+  return canonicalName || "Untitled Workspace"
+}
+
+function displayMemberName(member: {
+  email?: string | null
+  displayName?: string | null
+}) {
+  return cleanString(member.displayName) || cleanString(member.email) || "Unnamed member"
+}
+
+async function loadWorkspaces(user: { getIdToken: () => Promise<string> }) {
+  const token = await user.getIdToken()
+  const res = await fetch("/api/workspaces", {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  })
+  if (!res.ok) return []
+  const payload = (await res.json()) as { workspaces?: Workspace[] }
+  return payload.workspaces ?? []
+}
+
+async function createWorkspace(user: { getIdToken: () => Promise<string> }, name: string) {
+  const token = await user.getIdToken()
+  const res = await fetch("/api/workspaces", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ name }),
+  })
+  const payload = (await res.json()) as { workspace?: Workspace; error?: string }
+  if (!res.ok) throw new Error(payload.error ?? "Unable to create workspace.")
+  return payload.workspace!
+}
+
+async function patchWorkspaceName(
+  user: { getIdToken: () => Promise<string> },
+  workspaceId: string,
+  workspaceName: string
+) {
+  const token = await user.getIdToken()
+  const res = await fetch(`/api/workspaces/${workspaceId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ workspaceName }),
+  })
+  const payload = (await res.json().catch(() => null)) as { error?: string } | null
+  if (!res.ok) throw new Error(payload?.error ?? "Unable to update workspace title.")
+}
+
+function WorkspaceTitleEditor({
+  workspace,
+  title,
+  canEdit,
+  user,
+  onLocalTitleChange,
+  onError,
+}: {
+  workspace: Workspace
+  title: string
+  canEdit: boolean
+  user: { getIdToken: () => Promise<string> }
+  onLocalTitleChange: (workspaceId: string, workspaceName: string) => void
+  onError: (message: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(title)
+  const lastSaved = useRef(cleanString(workspace.workspaceName) || title)
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      router.push("/login")
-    }
-  }, [authLoading, router, user])
+    if (!editing) setDraft(title)
+  }, [editing, title])
 
   useEffect(() => {
-    if (authLoading || !user?.email || hasStaffWorkspace || viewAsParticipant) {
-      return
-    }
+    if (!editing || !canEdit) return
 
-    let cancelled = false
+    const timer = window.setTimeout(() => {
+      const nextTitle = cleanString(draft) || "Untitled Workspace"
+      if (nextTitle === lastSaved.current) return
 
-    const maybeRedirectToWorkspace = async () => {
-      const destination = await resolveClientDestination(getDb(), user.email, user)
-      if (!cancelled && destination !== "/dashboard") {
-        router.replace(destination)
-      }
-    }
-
-    void maybeRedirectToWorkspace()
-
-    return () => {
-      cancelled = true
-    }
-  }, [authLoading, hasStaffWorkspace, router, user, viewAsParticipant])
-
-  useEffect(() => {
-    if (user) {
-      void loadDashboardData()
-      return
-    }
-
-    setClient(null)
-    setSubscription(null)
-    setHousingWallet(null)
-    setTransactions([])
-    setBeamCoinBalance(null)
-    setBeamCoinTransactions([])
-    setPageLoading(false)
-  }, [activeClientId, user])
-
-  const loadDashboardData = async () => {
-    if (!user) {
-      setClient(null)
-      setPageLoading(false)
-      return
-    }
-
-    try {
-      setPageLoading(true)
-      setBeamCoinError(null)
-
-      const firestoreDb = getDb()
-      const clientId = activeClientId
-
-      if (!clientId) {
-        setClient(null)
-        setSubscription(null)
-        setHousingWallet(null)
-        setTransactions([])
-        setBeamCoinBalance(null)
-        setBeamCoinTransactions([])
-        return
-      }
-
-      const identityToken = await user.getIdToken()
-      const clientResponse = await fetch("/api/client-portal/identity", {
-        headers: {
-          Authorization: `Bearer ${identityToken}`,
-        },
-        cache: "no-store",
+      lastSaved.current = nextTitle
+      onLocalTitleChange(workspace.id, nextTitle)
+      patchWorkspaceName(user, workspace.id, nextTitle).catch((err) => {
+        onError(err instanceof Error ? err.message : "Unable to update workspace title.")
       })
+    }, 700)
 
-      if (!clientResponse.ok) {
-        throw new Error("Unable to load the active client profile.")
-      }
+    return () => window.clearTimeout(timer)
+  }, [canEdit, draft, editing, onError, onLocalTitleChange, user, workspace.id])
 
-      const clientPayload = (await clientResponse.json()) as {
-        client?: Partial<Client> | null
-      }
-      const docData = clientPayload.client
+  if (!canEdit) {
+    return <span className="truncate">{title}</span>
+  }
 
-      if (!docData) {
-        setClient(null)
-        setSubscription(null)
-        setHousingWallet(null)
-        setTransactions([])
-        setBeamCoinBalance(null)
-        setBeamCoinTransactions([])
-        return
-      }
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="min-w-0 truncate text-left"
+        onClick={() => setEditing(true)}
+        title="Edit workspace title"
+      >
+        {title}
+      </button>
+    )
+  }
 
-      const clientData: Client = {
-        uid: docData.uid || clientId,
-        name: docData.name || "",
-        email: docData.email || user.email || "",
-        beamCoinBalance: docData.beamCoinBalance || 0,
-        housingWalletBalance: docData.housingWalletBalance || 0,
-        stripeCustomerId: docData.stripeCustomerId,
-        planType: docData.planType,
-        companyName: docData.companyName || "",
-        contactTitle: docData.contactTitle || "",
-        phone: docData.phone || "",
-        organizationType: docData.organizationType || "",
-        serviceInterests: Array.isArray(docData.serviceInterests)
-          ? docData.serviceInterests.filter((value: unknown): value is string => typeof value === "string")
-          : [],
-        onboardingNotes: docData.onboardingNotes || "",
-        onboardingStatus: docData.onboardingStatus || "",
-        onboardingSource: docData.onboardingSource || "",
-        onboardingHandoffId: docData.onboardingHandoffId || "",
-        claimedClientId: docData.claimedClientId || "",
-        claimedStoryId: docData.claimedStoryId || "",
-        claimedClientName: docData.claimedClientName || "",
-        partnerTier: docData.partnerTier === "agency" ? "agency" : docData.partnerTier ?? null,
-        partnerSince:
-          (docData.partnerSince as { toDate?: () => Date } | null)?.toDate?.() ||
-          docData.partnerSince ||
-          null,
-        partnerCommissionPct:
-          typeof docData.partnerCommissionPct === "number"
-            ? docData.partnerCommissionPct
-            : undefined,
-        partnerReferralCount:
-          typeof docData.partnerReferralCount === "number"
-            ? docData.partnerReferralCount
-            : undefined,
-        createdAt: docData.createdAt as Date | undefined,
-      }
-
-      setClient(clientData)
-
-      if (clientData.stripeCustomerId) {
-        const subscriptionResponse = await fetch(
-          `/api/stripe/subscription?customerId=${clientData.stripeCustomerId}`
-        )
-
-        if (subscriptionResponse.ok) {
-          const subscriptionData = await subscriptionResponse.json()
-          setSubscription(subscriptionData)
-        } else {
-          setSubscription(null)
+  return (
+    <Input
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => {
+        const fallbackTitle = cleanString(draft) || "Untitled Workspace"
+        setDraft(fallbackTitle)
+        onLocalTitleChange(workspace.id, fallbackTitle)
+        if (fallbackTitle !== lastSaved.current) {
+          lastSaved.current = fallbackTitle
+          patchWorkspaceName(user, workspace.id, fallbackTitle).catch((err) => {
+            onError(err instanceof Error ? err.message : "Unable to update workspace title.")
+          })
         }
-      } else {
-        setSubscription(null)
-      }
+        setEditing(false)
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur()
+        if (event.key === "Escape") {
+          setDraft(title)
+          setEditing(false)
+        }
+      }}
+      className="h-9 min-w-0 rounded-2xl text-base font-semibold"
+      autoFocus
+    />
+  )
+}
 
-      const authHeaders = {
-        Authorization: `Bearer ${identityToken}`,
-      }
-      const housingWalletResponse = await fetch(
-        `/api/housing-wallet?clientId=${clientId}`,
-        { headers: authHeaders }
-      )
-      if (housingWalletResponse.ok) {
-        const housingWalletData = await housingWalletResponse.json()
-        setHousingWallet(housingWalletData)
-      } else {
-        setHousingWallet(null)
-      }
+export default function DashboardPage() {
+  const router = useRouter()
+  const { user, loading: authLoading } = useAuth()
 
-      const transactionsQuery = query(
-        collection(firestoreDb, "transactions"),
-        where("clientId", "==", clientId),
-        orderBy("timestamp", "desc")
-      )
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState("")
+  const [showCreate, setShowCreate] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-      const transactionsSnapshot = await getDocs(transactionsQuery)
-      const transactionsData = transactionsSnapshot.docs.map((transactionDoc) => ({
-        id: transactionDoc.id,
-        ...transactionDoc.data(),
-        timestamp:
-          transactionDoc.data().timestamp?.toDate?.() || transactionDoc.data().timestamp,
-      })) as Transaction[]
+  useEffect(() => {
+    if (authLoading) return
+    if (!user) {
+      router.replace("/login")
+      return
+    }
 
-      setTransactions(transactionsData)
-      await loadBeamCoinBalance(clientId, clientData.beamCoinBalance || 0)
-    } catch (error: any) {
-      console.error("Error loading dashboard data:", error)
+    setLoading(true)
+    loadWorkspaces(user)
+      .then(setWorkspaces)
+      .catch(() => setError("Unable to load workspaces."))
+      .finally(() => setLoading(false))
+  }, [authLoading, user, router])
 
-      if (error?.code === "unavailable" || error?.message?.includes("offline")) {
-        setBeamCoinError(
-          "Unable to connect to the database. Check your connection and try again."
-        )
-      } else if (error?.code === "permission-denied") {
-        setBeamCoinError("Permission denied. Please contact support.")
-      } else {
-        setBeamCoinError(error?.message || "Failed to load dashboard data")
-      }
+  const handleCreate = async () => {
+    if (!user || !newName.trim()) return
+    setCreating(true)
+    setError(null)
+    try {
+      const ws = await createWorkspace(user, newName.trim())
+      setWorkspaces((prev) => [ws, ...prev])
+      setNewName("")
+      setShowCreate(false)
+      router.push(`/workspace/${ws.id}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to create workspace.")
     } finally {
-      setPageLoading(false)
+      setCreating(false)
     }
   }
 
-  const loadBeamCoinBalance = async (uid: string, fallbackBalance: number) => {
-    setBeamCoinLoading(true)
-    setBeamCoinError(null)
-
-    try {
-      const token = await user?.getIdToken()
-      const authHeaders = token
-        ? {
-            Authorization: `Bearer ${token}`,
-          }
-        : undefined
-      const balanceResponse = await fetch(`/api/beam-coin?clientId=${uid}`, {
-        headers: authHeaders,
-      })
-      if (!balanceResponse.ok) {
-        throw new Error("Failed to fetch BEAM Coin balance")
-      }
-
-      const balanceData = await balanceResponse.json()
-      const nextBalance = balanceData.balance || 0
-      setBeamCoinBalance(nextBalance)
-      setClient((currentClient) =>
-        currentClient ? { ...currentClient, beamCoinBalance: nextBalance } : currentClient
+  const handleLocalTitleChange = (workspaceId: string, workspaceName: string) => {
+    setWorkspaces((prev) =>
+      prev.map((workspace) =>
+        workspace.id === workspaceId
+          ? { ...workspace, workspaceName, name: workspace.name || workspaceName }
+          : workspace
       )
-
-      const transactionsResponse = await fetch(
-        `/api/beam-coin/transactions?clientId=${uid}`,
-        { headers: authHeaders }
-      )
-      if (transactionsResponse.ok) {
-        const nextTransactions = await transactionsResponse.json()
-        setBeamCoinTransactions(
-          Array.isArray(nextTransactions) ? nextTransactions.slice(0, 8) : []
-        )
-      }
-    } catch (error) {
-      console.error("Error loading BEAM Coin data:", error)
-      setBeamCoinError("Ledger unavailable, showing cached balance.")
-      setBeamCoinBalance(fallbackBalance)
-    } finally {
-      setBeamCoinLoading(false)
-    }
+    )
   }
 
-  const handleRefreshBeamCoin = () => {
-    if (!activeClientId || !client) {
-      return
-    }
-
-    void loadBeamCoinBalance(activeClientId, client.beamCoinBalance || 0)
-  }
-
-  const handleToggleParticipantPreview = () => {
-    const nextParams = new URLSearchParams(searchParams.toString())
-
-    if (viewAsParticipant) {
-      nextParams.delete("viewAs")
-    } else {
-      nextParams.set("viewAs", "participant")
-    }
-
-    const queryString = nextParams.toString()
-    router.replace(queryString ? `/dashboard?${queryString}` : "/dashboard")
-  }
-
-  const handleSignOut = async () => {
-    await signOut()
-    router.push("/login")
-  }
-
-  const handleManageSubscription = async () => {
-    if (!client?.stripeCustomerId) {
-      return
-    }
-
-    try {
-      const response = await fetch("/api/stripe/create-portal-session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customerId: client.stripeCustomerId }),
-      })
-
-      const { url } = await response.json()
-      if (url) {
-        window.location.href = url
-      }
-    } catch (error) {
-      console.error("Error creating portal session:", error)
-      setStatusMessage({
-        tone: "danger",
-        text: "Unable to open the Stripe portal right now.",
-      })
-    }
-  }
-
-  const handleCheckout = async () => {
-    if (!activeClientId || !user) {
-      return
-    }
-
-    try {
-      const response = await fetch("/api/stripe/checkout", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${await user?.getIdToken()}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          clientId: activeClientId,
-          email: user?.email,
-        }),
-      })
-
-      const { url } = await response.json()
-      if (url) {
-        window.location.href = url
-        return
-      }
-
-      throw new Error("Missing checkout URL")
-    } catch (error) {
-      console.error("Error creating checkout session:", error)
-      setStatusMessage({
-        tone: "danger",
-        text: "Unable to start checkout. Please try again.",
-      })
-    }
-  }
-
-  const handleRedeemCredits = async () => {
-    if (!activeClientId || !user || !redeemAmount) {
-      return
-    }
-
-    const credits = Number.parseInt(redeemAmount, 10)
-    if (!Number.isFinite(credits) || credits <= 0) {
-      setStatusMessage({
-        tone: "warning",
-        text: "Enter a valid credit amount before submitting the redemption.",
-      })
-      return
-    }
-
-    setRedeeming(true)
-
-    try {
-      const response = await fetch("/api/housing-wallet-redeem", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${await user?.getIdToken()}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          clientId: activeClientId,
-          credits,
-          description: `Redeemed ${credits} housing credits`,
-        }),
-      })
-
-      const payload = await response.json()
-      if (!response.ok) {
-        throw new Error(payload.error || "Unable to redeem credits")
-      }
-
-      setRedeemOpen(false)
-      setRedeemAmount("")
-      setStatusMessage({
-        tone: "success",
-        text: `Redeemed ${credits} housing credits successfully.`,
-      })
-      await loadDashboardData()
-    } catch (error: any) {
-      console.error("Error processing redemption:", error)
-      setStatusMessage({
-        tone: "danger",
-        text: error?.message || "Error processing redemption.",
-      })
-    } finally {
-      setRedeeming(false)
-    }
-  }
-
-  if (authLoading || pageLoading) {
+  if (authLoading || loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -479,602 +290,179 @@ function DashboardPageContent() {
     )
   }
 
-  if (!user) {
-    return null
-  }
-
-  if (!client && !hasStaffWorkspace) {
-    return (
-      <div className="flex min-h-screen items-center justify-center px-4">
-        <Card className="w-full max-w-lg">
-          <CardHeader>
-            <CardTitle>Account Not Found</CardTitle>
-            <CardDescription>
-              Your account could not be located in the Readyaimgo client database.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {beamCoinError ? (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                {beamCoinError}
-              </div>
-            ) : null}
-            <Button onClick={handleSignOut}>Sign Out</Button>
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
-
-  const currentPlanLabel = subscription?.planName
-    ? subscription.planName
-    : client?.planType === "free"
-      ? "Free Tier"
-      : client?.planType || "No active plan"
-  const linkedBusinessName = client
-    ? client.companyName || client.claimedClientName || client.name
-    : null
-  const storyPreviewUrl = client?.claimedStoryId
-    ? `${marketingSiteUrl}/story/${encodeURIComponent(client.claimedStoryId)}/website`
-    : null
-
-  const messageStyles = {
-    success: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    warning: "border-amber-200 bg-amber-50 text-amber-700",
-    danger: "border-rose-200 bg-rose-50 text-rose-700",
-  }
-
-  const roleBadgeLabels = Array.from(new Set(viewerRoles))
+  if (!user) return null
 
   return (
-    <>
-      <AppShell
-        title={
-          viewAsParticipant
-            ? `Participant preview${client?.name ? ` for ${client.name}` : ""}`
-            : hasStaffWorkspace
-              ? "BEAM workspace"
-              : `Welcome back${client?.name ? `, ${client.name}` : ""}.`
-        }
-        description={
-          viewAsParticipant
-            ? "Preview the participant-facing dashboard without logging out of your admin session."
-            : hasStaffWorkspace
-              ? "Manage BEAM projects, test participant-only rendering, and keep client account context close when it exists."
-              : "This dashboard keeps subscriptions, community credits, housing support, and account activity inside one consistent workspace."
-        }
-        eyebrow={
-          viewAsParticipant
-            ? "Participant preview"
-            : hasStaffWorkspace
-              ? "BEAM workspace"
-              : "Client dashboard"
-        }
-        nav={[
-          { href: "/dashboard", label: "Dashboard", active: true },
-          ...(isBeamAdmin && !viewAsParticipant ? [{ href: "/admin", label: "Admin" }] : []),
-          ...(client?.partnerTier === "agency"
-            ? [{ href: "/partner", label: "Partner" }]
-            : []),
-          { href: "/settings", label: "Settings" },
-        ]}
-        actions={
-          <>
-            {client?.email || user.email ? (
-              <Badge variant="secondary">{client?.email || user.email}</Badge>
-            ) : null}
-            {isBeamAdmin ? (
-              <Button
-                variant={viewAsParticipant ? "default" : "outline"}
-                onClick={handleToggleParticipantPreview}
-              >
-                {viewAsParticipant ? (
-                  <>
-                    <ShieldPlus className="mr-2 h-4 w-4" />
-                    Exit Participant Preview
-                  </>
-                ) : (
-                  <>
-                    <UserRound className="mr-2 h-4 w-4" />
-                    View As Participant
-                  </>
-                )}
-              </Button>
-            ) : null}
-            <Button variant="outline" onClick={handleSignOut}>
-              <LogOut className="mr-2 h-4 w-4" />
-              Sign Out
-            </Button>
-          </>
-        }
-        intro={
-          <div className="rounded-[28px] border border-white/75 bg-white/80 p-5 shadow-sm">
-            {hasStaffWorkspace ? (
-              <>
-                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
-                  Role scope
-                </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {roleBadgeLabels.map((role) => (
-                    <Badge key={role} variant={role === "beam-admin" ? "accent" : "secondary"}>
-                      {role}
-                    </Badge>
-                  ))}
-                  {viewAsParticipant ? <Badge variant="accent">Participant only</Badge> : null}
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
-                  Account snapshot
-                </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Badge variant="accent">{currentPlanLabel}</Badge>
-                  {client ? (
-                    <Badge variant="secondary">
-                      {beamCoinBalance ?? client.beamCoinBalance ?? 0} BEAM
-                    </Badge>
-                  ) : null}
-                  {housingWallet ? <Badge>{currencyFormatter.format(housingWallet.value)}</Badge> : null}
-                </div>
-              </>
-            )}
-          </div>
-        }
-      >
-        {statusMessage ? (
-          <div
-            className={`mb-6 rounded-[24px] border px-5 py-4 text-sm ${messageStyles[statusMessage.tone]}`}
-          >
-            {statusMessage.text}
-          </div>
-        ) : null}
-
-        {!client && hasStaffWorkspace ? (
-          <Card className="mb-6 overflow-hidden border border-border/70 bg-white/90">
-            <CardContent className="space-y-3 p-6">
-              <p className="text-lg font-semibold text-slate-950">
-                {viewAsParticipant ? "Participant preview has no linked client profile." : "No linked client profile for this account."}
-              </p>
-              <p className="text-sm leading-7 text-slate-600">
-                {viewAsParticipant
-                  ? "The participant-only preview is active, but this admin account does not have an active client membership to populate the subscription and wallet cards."
-                  : "Use the admin projects area to create and manage project records. This dashboard only renders the participant-facing experience."}
-              </p>
-              {beamCoinError ? (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-                  {beamCoinError}
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {client && hasStaffWorkspace && !viewAsParticipant ? (
-          <Card className="mb-6 overflow-hidden border border-border/70 bg-white/90">
-            <CardContent className="space-y-3 p-6">
-              <p className="text-lg font-semibold text-slate-950">
-                Participant widgets are hidden in staff mode.
-              </p>
-              <p className="text-sm leading-7 text-slate-600">
-                Use the `View As Participant` toggle to re-render this page as participant-only, or manage projects from `/admin/projects`.
-              </p>
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {showParticipantExperience &&
-        client &&
-        (client.companyName ||
-          client.claimedClientName ||
-          (client.serviceInterests && client.serviceInterests.length > 0)) ? (
-          <Card className="mb-6 overflow-hidden border border-border/70 bg-white/90">
-            <CardContent className="grid gap-6 p-6 lg:grid-cols-[1fr_auto] lg:items-start">
-              <div className="space-y-4">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
-                    Connected business
-                  </p>
-                  <h2 className="mt-2 text-3xl font-semibold text-slate-950">
-                    {linkedBusinessName}
-                  </h2>
-                  <p className="mt-2 text-sm leading-7 text-slate-600">
-                    {client.claimedStoryId
-                      ? `This workspace is linked to the ${client.claimedStoryId} story entry on ReadyAimGo.`
-                      : "This workspace was created from a new-client intake and is ready for service planning."}
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  {client.onboardingStatus ? (
-                    <Badge variant="accent">{client.onboardingStatus}</Badge>
-                  ) : null}
-                  {client.organizationType ? (
-                    <Badge variant="secondary">{client.organizationType}</Badge>
-                  ) : null}
-                  {client.contactTitle ? (
-                    <Badge variant="secondary">{client.contactTitle}</Badge>
-                  ) : null}
-                </div>
-
-                {client.serviceInterests && client.serviceInterests.length > 0 ? (
-                  <div className="space-y-2">
-                    <p className="text-sm font-semibold text-slate-800">Selected service areas</p>
-                    <div className="flex flex-wrap gap-2">
-                      {client.serviceInterests.map((service) => {
-                        const option = CLIENT_SERVICE_OPTIONS.find((item) => item.id === service)
-
-                        return (
-                          <Badge key={service} variant="secondary">
-                            {option?.label || service}
-                          </Badge>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ) : null}
-
-                {client.onboardingNotes ? (
-                  <div className="rounded-[24px] border border-border/70 bg-muted/35 p-4 text-sm leading-7 text-slate-600">
-                    {client.onboardingNotes}
-                  </div>
-                ) : null}
-              </div>
-
-              {storyPreviewUrl ? (
-                <Button variant="outline" asChild>
-                  <a href={storyPreviewUrl} target="_blank" rel="noopener noreferrer">
-                    Preview Story
-                  </a>
-                </Button>
-              ) : null}
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {showParticipantExperience && client && client.planType === "free" && !subscription ? (
-          <Card className="mb-6 overflow-hidden bg-slate-950 text-white">
-            <CardContent className="flex flex-col gap-5 p-7 lg:flex-row lg:items-center lg:justify-between">
-              <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/55">
-                  Upgrade path
-                </p>
-                <h2 className="text-3xl font-semibold">Unlock premium client features.</h2>
-                <p className="max-w-2xl text-sm leading-7 text-white/72">
-                  Move beyond the free tier to manage subscriptions, credits, and support with
-                  fewer limits.
-                </p>
-              </div>
-              <Button variant="secondary" onClick={handleCheckout}>
-                <ArrowUp className="mr-2 h-4 w-4" />
-                Upgrade Now
-              </Button>
-            </CardContent>
-          </Card>
-        ) : null}
-
-        {showParticipantExperience && client ? (
-          <>
-            <section className="grid gap-4 lg:grid-cols-3">
-              <Card className="h-full">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-3">
-                    <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/12 text-primary">
-                      <CreditCard className="h-5 w-5" />
-                    </span>
-                    Subscription
-                  </CardTitle>
-                  <CardDescription>Current plan, renewal timing, and billing controls.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                  <div>
-                    <p className="text-3xl font-semibold text-slate-950">{currentPlanLabel}</p>
-                    {subscription ? (
-                      <p className="mt-2 text-sm text-slate-600">
-                        {currencyFormatter.format(subscription.amount)}/month
-                      </p>
-                    ) : (
-                      <p className="mt-2 text-sm text-slate-600">
-                        {client.planType === "free"
-                          ? "Upgrade to unlock premium features."
-                          : "No active Stripe subscription found."}
-                      </p>
-                    )}
-                  </div>
-
-                  {subscription ? (
-                    <div className="flex items-center gap-2 text-sm text-slate-600">
-                      <Calendar className="h-4 w-4 text-slate-400" />
-                      <span>Renews {format(new Date(subscription.renewalDate), "MMM d, yyyy")}</span>
-                    </div>
-                  ) : null}
-
-                  <Button
-                    className="w-full"
-                    onClick={subscription ? handleManageSubscription : handleCheckout}
-                  >
-                    {subscription ? "Manage Subscription" : "View Plans"}
-                  </Button>
-                </CardContent>
-              </Card>
-
-              <Card className="h-full">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-3">
-                    <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-secondary text-slate-800">
-                      <Wallet className="h-5 w-5" />
-                    </span>
-                    Housing Wallet
-                  </CardTitle>
-                  <CardDescription>Redeem credits and track their equivalent value.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                  {housingWallet ? (
-                    <>
-                      <div>
-                        <p className="text-3xl font-semibold text-slate-950">
-                          {housingWallet.credits} credits
-                        </p>
-                        <p className="mt-2 text-sm text-slate-600">
-                          {currencyFormatter.format(housingWallet.value)} in housing support
-                        </p>
-                      </div>
-                      <p className="text-sm leading-7 text-slate-600">{housingWallet.description}</p>
-                      <Button
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => setRedeemOpen(true)}
-                      >
-                        Redeem Nights
-                      </Button>
-                    </>
-                  ) : (
-                    <p className="text-sm text-slate-600">
-                      Wallet details are loading or unavailable for this account.
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="h-full">
-                <CardHeader>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <CardTitle className="flex items-center gap-3">
-                        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
-                          <Coins className="h-5 w-5" />
-                        </span>
-                        BEAM Coin Wallet
-                      </CardTitle>
-                      <CardDescription>
-                        Live balance plus the most recent ledger activity.
-                      </CardDescription>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={handleRefreshBeamCoin}
-                      disabled={beamCoinLoading}
-                    >
-                      <RefreshCw className={`h-4 w-4 ${beamCoinLoading ? "animate-spin" : ""}`} />
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                  <div>
-                    <p className="text-3xl font-semibold text-slate-950">
-                      {beamCoinLoading
-                        ? "Refreshing..."
-                        : beamCoinBalance ?? client.beamCoinBalance ?? 0}
-                    </p>
-                    <p className="mt-2 text-sm text-slate-600">
-                      Earn, spend, and monitor impact credits in one place.
-                    </p>
-                    {beamCoinError ? (
-                      <div className="mt-3 flex items-center gap-2 text-sm text-amber-700">
-                        <AlertCircle className="h-4 w-4" />
-                        <span>{beamCoinError}</span>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {beamCoinTransactions.length > 0 ? (
-                    <div className="space-y-2 rounded-[24px] border border-border/70 bg-muted/35 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
-                        Recent BEAM activity
-                      </p>
-                      <div className="space-y-3">
-                        {beamCoinTransactions.slice(0, 3).map((transaction, index) => (
-                          <div
-                            key={`${transaction.type}-${transaction.timestamp}-${index}`}
-                            className="flex items-center justify-between gap-4 text-sm"
-                          >
-                            <div>
-                              <p className="font-medium text-slate-900">
-                                {transaction.description || "BEAM Coin transaction"}
-                              </p>
-                              <p className="text-slate-500">
-                                {transaction.type === "earn" ? "Earned credits" : "Spent credits"}
-                              </p>
-                            </div>
-                            <p
-                              className={
-                                transaction.type === "earn"
-                                  ? "font-semibold text-emerald-600"
-                                  : "font-semibold text-rose-600"
-                              }
-                            >
-                              {transaction.type === "earn" ? "+" : "-"}
-                              {transaction.amount || 0}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
-            </section>
-
-            <section className="mt-8 grid gap-4 xl:grid-cols-2">
-              <Card>
-                <CardHeader>
-                  <CardTitle>BEAM Coin Transactions</CardTitle>
-                  <CardDescription>Your latest ledger activity and balance changes.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {beamCoinTransactions.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full text-left text-sm">
-                        <thead className="border-b border-border/70 text-xs uppercase tracking-[0.24em] text-slate-500">
-                          <tr>
-                            <th className="px-2 py-3 font-semibold">Type</th>
-                            <th className="px-2 py-3 font-semibold">Description</th>
-                            <th className="px-2 py-3 text-right font-semibold">Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {beamCoinTransactions.map((transaction, index) => (
-                            <tr
-                              key={`${transaction.type}-${transaction.timestamp}-${index}`}
-                              className="border-b border-border/50 last:border-none"
-                            >
-                              <td className="px-2 py-4">
-                                <Badge variant={transaction.type === "earn" ? "success" : "danger"}>
-                                  {transaction.type === "earn" ? "Earned" : "Spent"}
-                                </Badge>
-                              </td>
-                              <td className="px-2 py-4 text-slate-700">
-                                {transaction.description || "BEAM Coin transaction"}
-                              </td>
-                              <td
-                                className={`px-2 py-4 text-right font-semibold ${
-                                  transaction.type === "earn" ? "text-emerald-600" : "text-rose-600"
-                                }`}
-                              >
-                                {transaction.type === "earn" ? "+" : "-"}
-                                {transaction.amount || 0}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className="py-10 text-center text-sm text-slate-500">No BEAM transactions yet.</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              <RagNotesFeed clientEmail={user.email ?? ""} />
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Recent Account Transactions</CardTitle>
-                  <CardDescription>Payments, redemptions, and credit activity.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {transactions.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full text-left text-sm">
-                        <thead className="border-b border-border/70 text-xs uppercase tracking-[0.24em] text-slate-500">
-                          <tr>
-                            <th className="px-2 py-3 font-semibold">Date</th>
-                            <th className="px-2 py-3 font-semibold">Type</th>
-                            <th className="px-2 py-3 font-semibold">Description</th>
-                            <th className="px-2 py-3 text-right font-semibold">Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {transactions.map((transaction) => (
-                            <tr
-                              key={transaction.id}
-                              className="border-b border-border/50 last:border-none"
-                            >
-                              <td className="px-2 py-4 text-slate-700">
-                                {format(new Date(transaction.timestamp), "MMM d, yyyy")}
-                              </td>
-                              <td className="px-2 py-4">
-                                <Badge
-                                  variant={
-                                    transaction.type === "credit"
-                                      ? "success"
-                                      : transaction.type === "redemption"
-                                        ? "warning"
-                                        : "secondary"
-                                  }
-                                >
-                                  {transaction.type}
-                                </Badge>
-                              </td>
-                              <td className="px-2 py-4 text-slate-700">{transaction.description}</td>
-                              <td className="px-2 py-4 text-right font-semibold text-slate-950">
-                                {currencyFormatter.format(transaction.amount)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className="py-10 text-center text-sm text-slate-500">No transactions yet.</p>
-                  )}
-                </CardContent>
-              </Card>
-            </section>
-          </>
-        ) : null}
-      </AppShell>
-
-      {showParticipantExperience ? (
-        <Dialog open={redeemOpen} onOpenChange={setRedeemOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Redeem Housing Wallet Credits</DialogTitle>
-              <DialogDescription>
-                Enter the number of credits you want to redeem toward housing support.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3">
-              <label className="text-sm font-semibold text-slate-700">Credit amount</label>
-              <Input
-                inputMode="numeric"
-                min={1}
-                placeholder="10"
-                value={redeemAmount}
-                onChange={(event) => setRedeemAmount(event.target.value)}
-              />
-              {housingWallet ? (
-                <p className="text-sm text-slate-500">
-                  Available balance: {housingWallet.credits} credits
-                </p>
-              ) : null}
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setRedeemOpen(false)}>
-                Cancel
-              </Button>
-              <Button onClick={handleRedeemCredits} disabled={redeeming}>
-                {redeeming ? "Redeeming..." : "Confirm Redemption"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      ) : null}
-    </>
-  )
-}
-
-export default function DashboardPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-screen items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
+    <AppShell
+      eyebrow="Client Hub"
+      title="Your Workspaces"
+      description="Each workspace represents a single target framework. We assemble the documentation, financial rails, and asset metrics required to track our production against your expectations."
+      nav={[{ href: "/dashboard", label: "Workspaces", active: true }]}
+      actions={
+        <Button
+          variant="outline"
+          onClick={async () => {
+            await signOut()
+            router.replace("/login")
+          }}
+        >
+          <LogOut className="mr-2 h-4 w-4" />
+          Sign Out
+        </Button>
       }
     >
-      <DashboardPageContent />
-    </Suspense>
+      {error && (
+        <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {error}
+        </div>
+      )}
+
+      {/* Create workspace inline form */}
+      <div className="mb-6">
+        {showCreate ? (
+          <div className="flex flex-col gap-3 rounded-[28px] border border-border bg-white/80 p-5 sm:flex-row">
+            <Input
+              placeholder="Workspace name — e.g. Acme Corp, My App"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleCreate()
+              }}
+              autoFocus
+            />
+            <div className="flex gap-2">
+              <Button onClick={handleCreate} disabled={creating || !newName.trim()}>
+                {creating ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="mr-2 h-4 w-4" />
+                )}
+                Create
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowCreate(false)
+                  setNewName("")
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button onClick={() => setShowCreate(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            New Workspace
+          </Button>
+        )}
+      </div>
+
+      {/* Empty state */}
+      {workspaces.length === 0 && !showCreate && (
+        <div className="rounded-[28px] border border-dashed border-border bg-white/60 p-12 text-center">
+          <Github className="mx-auto h-10 w-10 text-slate-300" />
+          <p className="mt-4 text-base font-semibold text-slate-800">
+            Welcome to your ReadyAimGo Command Center.
+          </p>
+          <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+            Create an initial workspace to bind your business objectives.
+          </p>
+          <Button className="mt-6" onClick={() => setShowCreate(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            New Workspace Configuration
+          </Button>
+        </div>
+      )}
+
+      {/* Workspace grid */}
+      {workspaces.length > 0 && (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {workspaces.map((ws) => {
+            const displayName = resolveWorkspaceDisplayName(ws)
+            const primaryDomain = resolvePrimaryDomain(ws)
+            const canEditTitle =
+              ws.currentUserRole === "owner" || ws.currentUserRole === "developer"
+            const primaryRepo = ws.repos[0] ?? null
+            const memberSummaries = ws.memberSummaries ?? []
+
+            return (
+              <Card key={ws.id} className="h-full transition-shadow hover:shadow-md">
+                  <CardHeader>
+                    <CardTitle className="flex items-start justify-between gap-2">
+                      <WorkspaceTitleEditor
+                        workspace={ws}
+                        title={displayName}
+                        canEdit={canEditTitle}
+                        user={user}
+                        onLocalTitleChange={handleLocalTitleChange}
+                        onError={setError}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0 text-slate-400 hover:text-slate-950"
+                        onClick={() => router.push(`/workspace/${ws.id}`)}
+                        title="Open workspace"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </Button>
+                    </CardTitle>
+                    <CardDescription className="space-y-1">
+                      <span className="block text-sm text-slate-500">
+                        Primary Domain: {primaryDomain || "Not mapped yet"}
+                      </span>
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex flex-wrap gap-2">
+                      <span className="group/git relative inline-flex">
+                        <Badge variant="secondary">
+                          <Github className="mr-1 h-3 w-3" />
+                          Git {ws.repos.length}
+                        </Badge>
+                        {primaryRepo ? (
+                          <span className="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden min-w-64 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700 shadow-lg group-hover/git:block">
+                            {primaryRepo.url}
+                            {ws.repos.length > 1 ? (
+                              <span className="block text-slate-500">
+                                +{ws.repos.length - 1} more
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : null}
+                      </span>
+                      <Badge variant="secondary">
+                        <Server className="mr-1 h-3 w-3" />
+                        Vercel {ws.vercelProjects.length}
+                      </Badge>
+                      <span className="group/team relative inline-flex">
+                        <Badge variant="secondary">
+                          <Users className="mr-1 h-3 w-3" />
+                          Team {ws.memberCount}
+                        </Badge>
+                        <span className="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden min-w-64 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700 shadow-lg group-hover/team:block">
+                          {memberSummaries.length > 0 ? (
+                            memberSummaries.map((member) => (
+                              <span key={member.uid} className="block">
+                                {displayMemberName(member)}
+                                <span className="ml-1 text-slate-400">({member.role})</span>
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-slate-500">No workspace members loaded yet.</span>
+                          )}
+                        </span>
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+            )
+          })}
+        </div>
+      )}
+      <GlobalWorkspaceNotifier />
+    </AppShell>
   )
 }
