@@ -71,16 +71,51 @@ export async function GET(request: NextRequest) {
 
     const userSnap = await db.collection("users").doc(uid).get()
     const userData = userSnap.exists ? (userSnap.data() as Record<string, unknown>) : {}
-    const workspaceIds: string[] = Array.isArray(userData.workspaceIds)
+    const workspaceIdsFromUser: string[] = Array.isArray(userData.workspaceIds)
       ? (userData.workspaceIds as string[]).filter((id) => typeof id === "string")
       : []
 
-    if (workspaceIds.length === 0) {
+    // ── Fallback discovery ──────────────────────────────────────────────────
+    // If workspaceIds is missing or empty on the user doc (e.g. data was
+    // created before this field existed, or created in a different env),
+    // run parallel fallback queries so the user's workspaces are always found.
+    const [ownerSnap, memberGroupSnap] = await Promise.all([
+      // Workspaces where this user is the ownerUid (single-field query, no index)
+      db.collection("workspaces").where("ownerUid", "==", uid).limit(100).get(),
+      // Workspaces where this user has a members subcollection doc
+      // (collection group query — requires a composite index; soft-fails if absent)
+      db.collectionGroup("members").where("uid", "==", uid).limit(100).get().catch(() => null),
+    ])
+
+    const discoveredIds = new Set<string>(workspaceIdsFromUser)
+
+    for (const doc of ownerSnap.docs) discoveredIds.add(doc.id)
+
+    if (memberGroupSnap) {
+      for (const memberDoc of memberGroupSnap.docs) {
+        // parent path: workspaces/{workspaceId}/members/{uid}
+        const workspaceId = memberDoc.ref.parent.parent?.id
+        if (workspaceId) discoveredIds.add(workspaceId)
+      }
+    }
+
+    // Back-fill workspaceIds on the user doc so future requests skip discovery
+    if (discoveredIds.size > workspaceIdsFromUser.length) {
+      db.collection("users")
+        .doc(uid)
+        .set(
+          { workspaceIds: Array.from(discoveredIds), updatedAt: FieldValue.serverTimestamp() },
+          { merge: true }
+        )
+        .catch(() => undefined) // fire-and-forget, non-fatal
+    }
+
+    if (discoveredIds.size === 0) {
       return NextResponse.json({ success: true, workspaces: [] })
     }
 
     const workspaceEntries = await Promise.all(
-      workspaceIds.map(async (id) => {
+      Array.from(discoveredIds).map(async (id) => {
         const [workspaceSnap, memberSnap, membersSnap] = await Promise.all([
           db.collection("workspaces").doc(id).get(),
           db.collection("workspaces").doc(id).collection("members").doc(uid).get(),
@@ -117,6 +152,12 @@ export async function GET(request: NextRequest) {
           currentUserRole: parseWorkspaceRole(memberData?.role) ?? null,
           memberSummaries,
         }
+      })
+      // Sort newest first
+      .sort((a, b) => {
+        const ta = a.updatedAt ? new Date(a.updatedAt).getTime() : 0
+        const tb = b.updatedAt ? new Date(b.updatedAt).getTime() : 0
+        return tb - ta
       })
 
     return NextResponse.json({ success: true, workspaces })
