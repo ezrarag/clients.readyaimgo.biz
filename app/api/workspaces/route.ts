@@ -28,7 +28,13 @@ export async function GET(request: NextRequest) {
     const idToken = getBearerToken(request)
     if (!idToken) return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
 
-    const decodedToken = await getAdminAuth().verifyIdToken(idToken)
+    let decodedToken: Awaited<ReturnType<ReturnType<typeof getAdminAuth>["verifyIdToken"]>>
+    try {
+      decodedToken = await getAdminAuth().verifyIdToken(idToken)
+    } catch (error) {
+      console.warn("GET /api/workspaces auth error:", error)
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
+    }
     const uid = decodedToken.uid
     const db = getAdminDb()
     const adminParam = request.nextUrl.searchParams.get("admin") === "true"
@@ -69,8 +75,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, workspaces })
     }
 
-    const userSnap = await db.collection("users").doc(uid).get()
-    const userData = userSnap.exists ? (userSnap.data() as Record<string, unknown>) : {}
+    const userSnap = await db.collection("users").doc(uid).get().catch(() => null)
+    const userData = userSnap?.exists ? (userSnap.data() as Record<string, unknown>) : {}
     const workspaceIdsFromUser: string[] = Array.isArray(userData.workspaceIds)
       ? (userData.workspaceIds as string[]).filter((id) => typeof id === "string")
       : []
@@ -81,7 +87,7 @@ export async function GET(request: NextRequest) {
     // run parallel fallback queries so the user's workspaces are always found.
     const [ownerSnap, memberGroupSnap] = await Promise.all([
       // Workspaces where this user is the ownerUid (single-field query, no index)
-      db.collection("workspaces").where("ownerUid", "==", uid).limit(100).get(),
+      db.collection("workspaces").where("ownerUid", "==", uid).limit(100).get().catch(() => null),
       // Workspaces where this user has a members subcollection doc
       // (collection group query — requires a composite index; soft-fails if absent)
       db.collectionGroup("members").where("uid", "==", uid).limit(100).get().catch(() => null),
@@ -89,7 +95,7 @@ export async function GET(request: NextRequest) {
 
     const discoveredIds = new Set<string>(workspaceIdsFromUser)
 
-    for (const doc of ownerSnap.docs) discoveredIds.add(doc.id)
+    for (const doc of ownerSnap?.docs ?? []) discoveredIds.add(doc.id)
 
     if (memberGroupSnap) {
       for (const memberDoc of memberGroupSnap.docs) {
@@ -116,16 +122,22 @@ export async function GET(request: NextRequest) {
 
     const workspaceEntries = await Promise.all(
       Array.from(discoveredIds).map(async (id) => {
-        const [workspaceSnap, memberSnap, membersSnap] = await Promise.all([
-          db.collection("workspaces").doc(id).get(),
-          db.collection("workspaces").doc(id).collection("members").doc(uid).get(),
-          db.collection("workspaces").doc(id).collection("members").limit(50).get(),
-        ])
-        return { workspaceSnap, memberSnap, membersSnap }
+        try {
+          const [workspaceSnap, memberSnap, membersSnap] = await Promise.all([
+            db.collection("workspaces").doc(id).get(),
+            db.collection("workspaces").doc(id).collection("members").doc(uid).get(),
+            db.collection("workspaces").doc(id).collection("members").limit(50).get(),
+          ])
+          return { workspaceSnap, memberSnap, membersSnap }
+        } catch (error) {
+          console.warn(`GET /api/workspaces: failed to read workspace ${id}`, error)
+          return null
+        }
       })
     )
 
     const workspaces = workspaceEntries
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
       .filter(({ workspaceSnap }) => workspaceSnap.exists)
       .map(({ workspaceSnap, memberSnap, membersSnap }) => {
         const workspace = normalizeWorkspace(

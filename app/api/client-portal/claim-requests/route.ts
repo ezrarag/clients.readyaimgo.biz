@@ -38,10 +38,18 @@ function serializeRequest(id: string, data: Record<string, unknown>) {
 async function getAuthenticatedUser(request: NextRequest) {
   const token = getBearerToken(request)
   if (!token) {
-    throw new Error("Missing authorization token.")
+    const error = new Error("Missing authorization token.")
+    ;(error as Error & { status?: number }).status = 401
+    throw error
   }
 
-  return getAdminAuth().verifyIdToken(token)
+  try {
+    return await getAdminAuth().verifyIdToken(token)
+  } catch {
+    const error = new Error("Invalid authorization token.")
+    ;(error as Error & { status?: number }).status = 401
+    throw error
+  }
 }
 
 function serializeWorkspaceOption(id: string, data: Record<string, unknown>) {
@@ -202,9 +210,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ success: true, requests })
   } catch (error) {
     console.error("Claim requests GET error:", error)
+    const status = (error as Error & { status?: number }).status
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to load claim requests." },
-      { status: 500 }
+      { status: status ?? 500 }
     )
   }
 }
@@ -293,9 +302,10 @@ export async function POST(request: NextRequest) {
     })
   } catch (error) {
     console.error("Claim requests POST error:", error)
+    const status = (error as Error & { status?: number }).status
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to submit claim request." },
-      { status: 500 }
+      { status: status ?? 500 }
     )
   }
 }
