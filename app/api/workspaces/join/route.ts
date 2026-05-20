@@ -19,6 +19,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { FieldValue } from "firebase-admin/firestore"
 
+import { buildFirebaseAuthFailureDiagnostics } from "@/lib/firebase-diagnostics"
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
 import { getBearerToken } from "@/lib/portal-auth"
 import { parseWorkspaceRole } from "@/lib/workspaces"
@@ -38,7 +39,11 @@ export async function POST(request: NextRequest) {
     const decoded = await getAdminAuth().verifyIdToken(idToken)
     uid = decoded.uid
     email = decoded.email
-  } catch {
+  } catch (error) {
+    console.warn(
+      "workspaces/join: token verification failed",
+      buildFirebaseAuthFailureDiagnostics(idToken, error)
+    )
     return NextResponse.json({ error: "Invalid token." }, { status: 401 })
   }
 

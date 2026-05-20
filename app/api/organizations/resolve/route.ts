@@ -6,6 +6,7 @@ import {
   mapClientPlanToOrgPlan,
   slugifyOrgName,
 } from "@/lib/organizations"
+import { getFirebaseAdminDiagnostics } from "@/lib/firebase-diagnostics"
 import { getAdminDb } from "@/lib/firebase-admin"
 
 function readString(value: unknown) {
@@ -177,6 +178,10 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ orgId, created: true })
   } catch (error) {
+    console.error("organizations/resolve error:", {
+      admin: getFirebaseAdminDiagnostics(),
+      message: error instanceof Error ? error.message : String(error),
+    })
     const message =
       error instanceof Error ? error.message : "Unable to resolve organization."
     return NextResponse.json({ error: message }, { status: 500 })

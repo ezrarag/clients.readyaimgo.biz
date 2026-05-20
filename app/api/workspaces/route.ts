@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { FieldValue } from "firebase-admin/firestore"
 
+import { buildFirebaseAuthFailureDiagnostics } from "@/lib/firebase-diagnostics"
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
 import { getBearerToken } from "@/lib/portal-auth"
 import {
@@ -32,7 +33,10 @@ export async function GET(request: NextRequest) {
     try {
       decodedToken = await getAdminAuth().verifyIdToken(idToken)
     } catch (error) {
-      console.warn("GET /api/workspaces auth error:", error)
+      console.warn(
+        "GET /api/workspaces auth error:",
+        buildFirebaseAuthFailureDiagnostics(idToken, error)
+      )
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
     }
     const uid = decodedToken.uid
@@ -195,7 +199,16 @@ export async function POST(request: NextRequest) {
     const idToken = getBearerToken(request)
     if (!idToken) return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
 
-    const decodedToken = await getAdminAuth().verifyIdToken(idToken)
+    let decodedToken: Awaited<ReturnType<ReturnType<typeof getAdminAuth>["verifyIdToken"]>>
+    try {
+      decodedToken = await getAdminAuth().verifyIdToken(idToken)
+    } catch (error) {
+      console.warn(
+        "POST /api/workspaces auth error:",
+        buildFirebaseAuthFailureDiagnostics(idToken, error)
+      )
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
+    }
     const uid = decodedToken.uid
     const email = decodedToken.email ?? ""
     const db = getAdminDb()
