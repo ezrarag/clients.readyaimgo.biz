@@ -4,7 +4,7 @@ import {
   doc,
   getDoc,
   serverTimestamp,
-  setDoc,
+  writeBatch,
   type Firestore,
 } from "firebase/firestore"
 
@@ -224,13 +224,21 @@ export async function upsertClientAccountRecord({
     handoff?.contactName ||
     (typeof existing?.name === "string" ? existing.name : "")
 
-  await setDoc(
+  const batch = writeBatch(firestoreDb)
+
+  batch.set(
     clientRef,
     {
       uid: user.uid,
       email: user.email,
+      businessEmail: user.email,
       name: fullName,
       companyName: companyName || null,
+      clientBusinessName: companyName || null,
+      adminApprovalPending:
+        typeof existing?.adminApprovalPending === "boolean"
+          ? existing.adminApprovalPending
+          : true,
       contactTitle:
         onboarding.contactTitle.trim() ||
         handoff?.role ||
@@ -294,7 +302,7 @@ export async function upsertClientAccountRecord({
   )
 
   const membershipTimestamp = new Date().toISOString()
-  await setDoc(
+  batch.set(
     doc(firestoreDb, "users", user.uid),
     {
       client_id: clientId,
@@ -311,6 +319,8 @@ export async function upsertClientAccountRecord({
     },
     { merge: true }
   )
+
+  await batch.commit()
 
   if (handoff?.id) {
     try {

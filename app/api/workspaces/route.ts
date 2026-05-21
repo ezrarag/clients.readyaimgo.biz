@@ -222,14 +222,16 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Bridge fields ──────────────────────────────────────────────────────────
-    const clientId =
+    const requestedClientId =
       typeof body.clientId === "string" && body.clientId.trim()
         ? body.clientId.trim().toLowerCase()
         : null
+    const emailClientId = email ? email.trim().toLowerCase() : null
+    const clientId = requestedClientId ?? emailClientId
     const clientEmail =
       typeof body.clientEmail === "string" && body.clientEmail.trim()
         ? body.clientEmail.trim().toLowerCase()
-        : clientId // fall back to clientId if it looks like an email
+        : emailClientId ?? clientId // fall back to authenticated email when available
     const orgId =
       typeof body.orgId === "string" && body.orgId.trim()
         ? body.orgId.trim()
@@ -237,11 +239,13 @@ export async function POST(request: NextRequest) {
 
     // Mirror stripeCustomerId from the existing client doc if available
     let stripeCustomerId: string | null = null
+    let existingClientData: Record<string, unknown> | null = null
     if (clientId) {
       try {
         const clientSnap = await db.collection("clients").doc(clientId).get()
         if (clientSnap.exists) {
           const cd = clientSnap.data() as Record<string, unknown>
+          existingClientData = cd
           stripeCustomerId =
             typeof cd.stripeCustomerId === "string" ? cd.stripeCustomerId : null
         }
@@ -318,7 +322,27 @@ export async function POST(request: NextRequest) {
     if (clientId) {
       batch.set(
         db.collection("clients").doc(clientId),
-        { workspaceId, updatedAt: now },
+        {
+          uid,
+          businessEmail: clientEmail,
+          email: clientEmail,
+          clientBusinessName:
+            typeof existingClientData?.clientBusinessName === "string"
+              ? existingClientData.clientBusinessName
+              : name,
+          companyName:
+            typeof existingClientData?.companyName === "string"
+              ? existingClientData.companyName
+              : name,
+          workspaceId,
+          workspaceIds: FieldValue.arrayUnion(workspaceId),
+          adminApprovalPending:
+            typeof existingClientData?.adminApprovalPending === "boolean"
+              ? existingClientData.adminApprovalPending
+              : true,
+          createdAt: existingClientData?.createdAt ?? now,
+          updatedAt: now,
+        },
         { merge: true }
       )
     }

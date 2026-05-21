@@ -94,6 +94,179 @@ async function isBeamAdmin(uid: string): Promise<boolean> {
   return Array.isArray(roles) && roles.includes("beam-admin")
 }
 
+function readString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null
+}
+
+function readStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : []
+}
+
+function summarizeHostingConfig(workspace: Record<string, unknown>) {
+  const hosting =
+    workspace.hosting && typeof workspace.hosting === "object"
+      ? (workspace.hosting as Record<string, unknown>)
+      : {}
+  const primaryProvider = readString(hosting.primaryProvider) ?? "vercel"
+  const domainRegistrars = Array.isArray(hosting.domainRegistrars)
+    ? hosting.domainRegistrars.length
+    : 0
+  const manualDnsTargets = Array.isArray(hosting.manualDnsTargets)
+    ? hosting.manualDnsTargets.length
+    : 0
+  const staticHosts = Array.isArray(hosting.staticHosts) ? hosting.staticHosts.length : 0
+
+  return `${primaryProvider}; DNS targets: ${manualDnsTargets}; registrars: ${domainRegistrars}; static hosts: ${staticHosts}`
+}
+
+function estimateDataStructureLines(value: unknown) {
+  const serialized = JSON.stringify(value ?? {}, null, 2)
+  return Math.max(1, serialized.split("\n").length)
+}
+
+function extractRepositoryHandle(value: Record<string, unknown>) {
+  const repository =
+    value.repository && typeof value.repository === "object"
+      ? (value.repository as Record<string, unknown>)
+      : null
+
+  return (
+    readString(value.githubRepo) ||
+    readString(value.repoSlug) ||
+    readString(value.fullName) ||
+    readString(repository?.fullName)
+  )
+}
+
+async function fetchGitHubRepoEvidence(fullName: string) {
+  const token = process.env.GITHUB_TOKEN || process.env.GITHUB_ACCESS_TOKEN || process.env.GITHUB_PAT
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  }
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  const repoPath = encodeURIComponent(fullName).replace(/%2F/g, "/")
+  const [languagesRes, commitsRes] = await Promise.all([
+    fetch(`https://api.github.com/repos/${repoPath}/languages`, {
+      headers,
+      cache: "no-store",
+    }).catch(() => null),
+    fetch(`https://api.github.com/repos/${repoPath}/commits?per_page=5`, {
+      headers,
+      cache: "no-store",
+    }).catch(() => null),
+  ])
+
+  const languages =
+    languagesRes?.ok ? ((await languagesRes.json().catch(() => ({}))) as Record<string, number>) : {}
+  const commits = commitsRes?.ok
+    ? (((await commitsRes.json().catch(() => [])) as Array<Record<string, unknown>>) ?? [])
+    : []
+
+  const languageSummary = Object.entries(languages)
+    .slice(0, 5)
+    .map(([language, lines]) => `${language}: ${lines}`)
+    .join(", ")
+
+  const commitSummary = commits
+    .slice(0, 5)
+    .map((commit) => {
+      const commitData =
+        commit.commit && typeof commit.commit === "object"
+          ? (commit.commit as Record<string, unknown>)
+          : {}
+      const message = readString(commitData.message)
+      const sha = readString(commit.sha)
+      return message ? `${sha ? `${sha.slice(0, 8)} ` : ""}${message.split("\n")[0]}` : null
+    })
+    .filter((item): item is string => Boolean(item))
+    .join(" | ")
+
+  return [
+    languageSummary && `GitHub language metric for ${fullName}: ${languageSummary}`,
+    commitSummary && `Latest default-branch commits for ${fullName}: ${commitSummary}`,
+  ].filter((item): item is string => Boolean(item))
+}
+
+async function collectWorkspaceTechnicalContext(
+  db: FirebaseFirestore.Firestore,
+  workspaceId: string,
+  wsData: Record<string, unknown>
+) {
+  const context: string[] = []
+  const hostingSummary = summarizeHostingConfig(wsData)
+
+  const repos = Array.isArray(wsData.repos)
+    ? (wsData.repos as Array<Record<string, unknown>>)
+    : []
+  for (const repo of repos.slice(0, 6)) {
+    const fullName = readString(repo.fullName)
+    if (!fullName) continue
+    context.push(
+      `GitHub repository: ${fullName}; language: ${readString(repo.language) ?? "not recorded"}; URL: ${
+        readString(repo.url) ?? "not recorded"
+      }; verified metadata lines: ${estimateDataStructureLines(repo)}`
+    )
+    context.push(...(await fetchGitHubRepoEvidence(fullName)))
+  }
+
+  const vercelProjects = Array.isArray(wsData.vercelProjects)
+    ? (wsData.vercelProjects as Array<Record<string, unknown>>)
+    : []
+  for (const project of vercelProjects.slice(0, 10)) {
+    const repoHandle = extractRepositoryHandle(project)
+    context.push(
+      `Vercel deployment: ${readString(project.name) ?? readString(project.id) ?? "unnamed"}; deployment ID: ${
+        readString(project.deploymentId) ?? readString(project.id) ?? "not recorded"
+      }; repo: ${repoHandle ?? "not mapped"}; framework: ${
+        readString(project.framework) ?? "not recorded"
+      }; state: ${readString(project.deploymentState) ?? "not recorded"}; domains: ${
+        readStringArray(project.domains).join(", ") || readString(project.url) || "not recorded"
+      }; hosting platform configuration: ${hostingSummary}; verified metadata lines: ${estimateDataStructureLines(project)}`
+    )
+  }
+
+  const clientId = readString(wsData.clientId)
+  const projectIds = readStringArray(wsData.projectIds)
+  const [workspaceProjectSnap, clientProjectSnap, explicitProjectSnaps] = await Promise.all([
+    db.collection("projects").where("workspaceId", "==", workspaceId).limit(20).get().catch(() => null),
+    clientId
+      ? db.collection("projects").where("clientId", "==", clientId).limit(20).get().catch(() => null)
+      : Promise.resolve(null),
+    Promise.all(
+      projectIds.slice(0, 20).map((projectId) => db.collection("projects").doc(projectId).get())
+    ).catch(() => []),
+  ])
+
+  const projects = new Map<string, Record<string, unknown>>()
+  for (const doc of workspaceProjectSnap?.docs ?? []) projects.set(doc.id, doc.data() as Record<string, unknown>)
+  for (const doc of clientProjectSnap?.docs ?? []) projects.set(doc.id, doc.data() as Record<string, unknown>)
+  for (const doc of explicitProjectSnaps) {
+    if (doc.exists) projects.set(doc.id, doc.data() as Record<string, unknown>)
+  }
+
+  for (const [projectId, project] of projects) {
+    context.push(
+      `Workspace project record: ${readString(project.title) ?? readString(project.name) ?? projectId}; type: ${
+        readString(project.projectType) ?? "not recorded"
+      }; summary: ${
+        readString(project.summary) || readString(project.description) || "not recorded"
+      }; repo: ${extractRepositoryHandle(project) ?? "not mapped"}; Vercel deployment ID: ${
+        readString(project.vercelDeploymentId) ?? readString(project.vercelProjectId) ?? "not recorded"
+      }; live URL: ${
+        readString(project.liveUrl) || readString(project.deployUrl) || "not recorded"
+      }; latest commit: ${
+        readString(project.latestCommitMessage) || readString(project.latestCommitSha) || "not recorded"
+      }; verified metadata lines: ${estimateDataStructureLines(project)}`
+    )
+  }
+
+  return Array.from(new Set(context)).slice(0, 40)
+}
+
 // ─── Prompt builder ───────────────────────────────────────────────────────────
 
 function buildPrompt(params: {
@@ -107,6 +280,7 @@ function buildPrompt(params: {
   revisionRequest: string
   sourceDocuments: string[]
   adminRules: string[]
+  technicalContext: string[]
 }): string {
   const sections = [
     `**Workspace / Client:** ${params.workspaceName}${params.clientId ? ` (client ID: ${params.clientId})` : ""}`,
@@ -119,6 +293,10 @@ function buildPrompt(params: {
     params.sourceDocuments.length > 0 &&
       `**Referenced workspace documents:**\n${params.sourceDocuments
         .map((name) => `- ${name}`)
+        .join("\n")}`,
+    params.technicalContext.length > 0 &&
+      `**Repository and deployment evidence:**\n${params.technicalContext
+        .map((item, index) => `${index + 1}. ${item}`)
         .join("\n")}`,
     params.adminRules.length > 0 &&
       `**Admin-provided drafting rules, rulesets, and boilerplate guidance:**\n${params.adminRules
@@ -153,6 +331,10 @@ IMPORTANT RULES:
 3. Always include in legalReviewNotes: "This AI-generated draft is not legal advice and requires review by qualified legal counsel before execution."
 4. Keep language professional and specific to the provided context.
 5. Treat admin-provided drafting rules as binding context. If a client revision conflicts with those rules, preserve the rule and flag the conflict in legalReviewNotes.
+6. Cross-examine the customer text against the repository and deployment evidence before writing scope, deliverables, assumptions, and payment terms.
+7. Reference real repository handles, deployment IDs, project records, modules, or platform configuration only when they appear in the evidence.
+8. Purge generic template placeholders and unrelated examples, including pizza, restaurant, or canned sample project language unless the customer explicitly supplied that context.
+9. Do not invent codebases, deployment logs, municipal endpoints, financial terms, or client obligations that are not supported by the supplied context.
 
 ---
 
@@ -367,6 +549,8 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Generate draft ───────────────────────────────────────────────────────
+    const adminRules = collectAdminContractRules(wsData)
+    const technicalContext = await collectWorkspaceTechnicalContext(db, workspaceId, wsData)
     const prompt = buildPrompt({
       workspaceName,
       clientId,
@@ -377,7 +561,8 @@ export async function POST(request: NextRequest) {
       constraints,
       revisionRequest,
       sourceDocuments,
-      adminRules: collectAdminContractRules(wsData),
+      adminRules,
+      technicalContext,
     })
 
     const draft = await generateDraft(prompt)
@@ -419,7 +604,8 @@ export async function POST(request: NextRequest) {
       draftContent: draft,
       sourceDocumentIds: sourceDocumentIds.slice(0, 10),
       revisionRequest: revisionRequest || null,
-      adminRulesApplied: collectAdminContractRules(wsData),
+      adminRulesApplied: adminRules,
+      repoContextApplied: technicalContext,
       createdBy: decoded.uid,
       createdAt: now,
       updatedAt: now,
@@ -441,6 +627,7 @@ export async function POST(request: NextRequest) {
         success: true,
         contractId: contractRef.id,
         draft,
+        repoContextApplied: technicalContext.length,
       },
       { status: 201 }
     )
