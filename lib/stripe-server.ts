@@ -28,6 +28,34 @@ function readUsableStripeSecret() {
   return secretKey
 }
 
+function keyDiagnostics(name: string, expectedPattern: RegExp) {
+  const value = process.env[name]?.trim() ?? ""
+  return {
+    name,
+    present: Boolean(value),
+    length: value.length,
+    prefix: value ? value.slice(0, 8) : null,
+    usable: expectedPattern.test(value) && !value.includes("..."),
+  }
+}
+
+export function getStripeConfigDiagnostics() {
+  return {
+    secretKeys: [
+      keyDiagnostics("STRIPE_SECRET_KEY", /^sk_(test|live)_/),
+      keyDiagnostics("STRIPE_LIVE_SECRET_KEY", /^sk_live_/),
+      keyDiagnostics("STRIPE_TEST_SECRET_KEY", /^sk_test_/),
+    ],
+    publishableKeys: [
+      keyDiagnostics("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY", /^pk_(test|live)_/),
+      keyDiagnostics("STRIPE_PUBLISHABLE_KEY", /^pk_(test|live)_/),
+      keyDiagnostics("STRIPE_LIVE_PUBLISHABLE_KEY", /^pk_live_/),
+      keyDiagnostics("STRIPE_TEST_PUBLISHABLE_KEY", /^pk_test_/),
+    ],
+    webhookSecret: keyDiagnostics("STRIPE_WEBHOOK_SECRET", /^whsec_/),
+  }
+}
+
 export function getStripePublishableKey() {
   const candidates = [
     process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
