@@ -119,6 +119,15 @@ interface WorkspaceExpense {
   description: string
   amount: number
   status: "paid" | "unpaid"
+  serviceProvider: "Namecheap" | "Zoho" | "Twilio" | "Vercel"
+  billingCycleType:
+    | "Domain Renewal"
+    | "Business Email Tier"
+    | "API Consumption"
+    | "Compute Allocation"
+  dueDate: string | null
+  daysOverdue: number
+  criticalSystemFlag: boolean
   vendor: string | null
   category: string
   contractAppendageReady: boolean
@@ -562,6 +571,42 @@ function buildLedgerJustificationTooltip(entries: WorkspaceLedgerEntry[]) {
   ].join("\n")
 }
 
+function utilityHealthForProvider(
+  expenses: WorkspaceExpense[],
+  provider: WorkspaceExpense["serviceProvider"]
+) {
+  const related = expenses.filter((expense) => expense.serviceProvider === provider)
+  const critical = related.some((expense) => expense.criticalSystemFlag)
+  const unpaid = related.some((expense) => expense.status === "unpaid")
+
+  if (critical) {
+    return {
+      label: "critical",
+      variant: "danger" as const,
+      detail: "Invoice overdue or due now; production component at risk.",
+    }
+  }
+  if (unpaid) {
+    return {
+      label: "invoice pending",
+      variant: "warning" as const,
+      detail: "Tracked utility has an unpaid invoice awaiting clearance.",
+    }
+  }
+  if (related.length > 0) {
+    return {
+      label: "cleared",
+      variant: "success" as const,
+      detail: "Tracked utility liabilities are currently cleared.",
+    }
+  }
+  return {
+    label: "tracked",
+    variant: "secondary" as const,
+    detail: "Utility dependency is tracked; no invoice is currently recorded.",
+  }
+}
+
 // ─── InfoTooltip ──────────────────────────────────────────────────────────────
 // Lightweight CSS-only tooltip rendered adjacent to section headers. Keeps the
 // viewport clear of long explanatory prose while making context discoverable.
@@ -744,6 +789,7 @@ export default function WorkspacePage() {
   const [payingDeliverableId, setPayingDeliverableId] = useState<string | null>(null)
   const [authorizingExpenseId, setAuthorizingExpenseId] = useState<string | null>(null)
   const [analyzingLedger, setAnalyzingLedger] = useState(false)
+  const [insufficientExpense, setInsufficientExpense] = useState<WorkspaceExpense | null>(null)
   // Active tab — read from URL on mount so Stripe can redirect back to ?tab=payments
   const [activeTab, setActiveTab] = useState("projects")
   // AI contract draft dialog
@@ -780,6 +826,35 @@ export default function WorkspacePage() {
     [members, user?.uid]
   )
   const canManageWorkspace = currentMember?.role === "owner" || currentMember?.role === "developer"
+  const trackedUtilities = useMemo(
+    () =>
+      [
+        {
+          provider: "Namecheap" as const,
+          label: "Namecheap Domain",
+          cycle: "Domain Renewal",
+        },
+        {
+          provider: "Zoho" as const,
+          label: "Zoho Mail System",
+          cycle: "Business Email Tier",
+        },
+        {
+          provider: "Twilio" as const,
+          label: "Twilio Communication Gate",
+          cycle: "API Consumption",
+        },
+        {
+          provider: "Vercel" as const,
+          label: "Vercel Compute Allocation",
+          cycle: "Compute Allocation",
+        },
+      ].map((utility) => ({
+        ...utility,
+        health: utilityHealthForProvider(expenses, utility.provider),
+      })),
+    [expenses]
+  )
 
   const filteredRepos = useMemo(() => {
     const q = repoQuery.toLowerCase()
@@ -1310,6 +1385,12 @@ export default function WorkspacePage() {
 
   const authorizeExpenseDisbursement = async (expenseId: string) => {
     if (!user || !workspace || currentMember?.role !== "owner") return
+    const targetExpense = expenses.find((expense) => expense.id === expenseId)
+    const activeRetainerBalance = paymentData?.retainerBalance ?? 0
+    if (targetExpense && activeRetainerBalance < targetExpense.amount) {
+      setInsufficientExpense(targetExpense)
+      return
+    }
     setAuthorizingExpenseId(expenseId)
     setError(null)
     setMessage(null)
@@ -1645,6 +1726,49 @@ export default function WorkspacePage() {
           {message}
         </div>
       )}
+      <Dialog
+        open={Boolean(insufficientExpense)}
+        onOpenChange={(open) => {
+          if (!open) setInsufficientExpense(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Insufficient Escrow Reserves</DialogTitle>
+            <DialogDescription>
+              Your active retainer balance cannot cover this allocation utility. Please
+              load funds into your account below.
+            </DialogDescription>
+          </DialogHeader>
+          {insufficientExpense ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              <p className="font-semibold">{insufficientExpense.source}</p>
+              <p className="mt-1">
+                Required: {currencyFormatter.format(insufficientExpense.amount)} · Available:{" "}
+                {currencyFormatter.format(paymentData?.retainerBalance ?? 0)}
+              </p>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setInsufficientExpense(null)}
+            >
+              Close
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setInsufficientExpense(null)
+                setActiveTab("payments")
+              }}
+            >
+              Load Funds
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="mb-6 flex w-full max-w-full justify-start gap-1 overflow-x-auto overflow-y-hidden rounded-2xl sm:flex-wrap sm:overflow-visible">
@@ -2267,76 +2391,166 @@ export default function WorkspacePage() {
                 </div>
               ) : null}
 
-              <div className="space-y-3 rounded-2xl border border-border bg-white/80 p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="rounded-2xl border border-border bg-white/80 p-4">
+                <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="text-sm font-semibold text-slate-900">
-                      Itemized Infrastructure Expense Ledger
+                      Infrastructural Liabilities Registry
                     </p>
                     <p className="text-xs text-slate-500">
-                      Domain renewals, DNS charges, and hosting liabilities scoped to this workspace.
+                      Third-party service dependencies and retainer-cleared utility invoices.
                     </p>
                   </div>
-                  <Badge variant="secondary">
-                    {expenses.filter((expense) => expense.status === "unpaid").length} unpaid
-                  </Badge>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="secondary">
+                      {expenses.filter((expense) => expense.status === "unpaid").length} unpaid
+                    </Badge>
+                    <Badge
+                      variant={
+                        expenses.some((expense) => expense.criticalSystemFlag)
+                          ? "danger"
+                          : "success"
+                      }
+                    >
+                      {expenses.some((expense) => expense.criticalSystemFlag)
+                        ? "critical risk"
+                        : "no critical flags"}
+                    </Badge>
+                  </div>
                 </div>
 
-                {expenses.length === 0 ? (
-                  <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-500">
-                    No infrastructure expenses recorded yet.
-                  </p>
-                ) : (
-                  <div className="space-y-2">
-                    {expenses.map((expense) => (
-                      <div
-                        key={expense.id}
-                        className="grid gap-3 rounded-xl bg-slate-50 p-3 lg:grid-cols-[1fr_auto_auto] lg:items-center"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="truncate text-sm font-semibold text-slate-900">
-                              {expense.source}
-                            </p>
-                            <Badge variant={expense.status === "paid" ? "success" : "warning"}>
-                              {expense.status}
-                            </Badge>
-                            {expense.contractAppendageReady ? (
-                              <Badge variant="secondary">contract-ready</Badge>
-                            ) : null}
+                <div className="grid gap-4 pt-4 lg:grid-cols-[0.85fr_1.15fr]">
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Active Tracked Utilities
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Connection health for production utility gates.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      {trackedUtilities.map((utility) => (
+                        <div
+                          key={utility.provider}
+                          className="rounded-xl border border-border bg-slate-50 px-3 py-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">
+                                {utility.label}
+                              </p>
+                              <p className="mt-0.5 text-xs text-slate-500">{utility.cycle}</p>
+                            </div>
+                            <Badge variant={utility.health.variant}>{utility.health.label}</Badge>
                           </div>
-                          <p className="mt-1 text-xs text-slate-500">
-                            {expense.description}
-                            {expense.vendor ? ` · ${expense.vendor}` : ""}
+                          <p className="mt-2 text-xs leading-5 text-slate-500">
+                            {utility.health.detail}
                           </p>
                         </div>
-                        <p className="text-sm font-bold text-slate-900">
-                          {currencyFormatter.format(expense.amount)}
-                        </p>
-                        {expense.status === "unpaid" ? (
-                          <Button
-                            type="button"
-                            size="sm"
-                            onClick={() => void authorizeExpenseDisbursement(expense.id)}
-                            disabled={
-                              currentMember?.role !== "owner" ||
-                              authorizingExpenseId === expense.id
-                            }
-                          >
-                            {authorizingExpenseId === expense.id ? (
-                              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                            ) : null}
-                            Authorize Retainer Disbursement
-                          </Button>
-                        ) : (
-                          <span className="text-xs font-semibold text-emerald-700">
-                            Cleared
-                          </span>
-                        )}
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                )}
+
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        Pending Resource Invoices
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Clear unpaid utility liabilities directly through the trust retainer.
+                      </p>
+                    </div>
+                    {expenses.length === 0 ? (
+                      <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                        No infrastructure expenses recorded yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-3">
+                        {expenses.map((expense) => (
+                          <div
+                            key={expense.id}
+                            className={[
+                              "rounded-xl border bg-slate-50 p-3",
+                              expense.criticalSystemFlag
+                                ? "border-rose-300 bg-rose-50/70"
+                                : expense.status === "paid"
+                                  ? "border-emerald-100 bg-emerald-50/50"
+                                  : "border-border",
+                            ].join(" ")}
+                          >
+                            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-sm font-semibold text-slate-900">
+                                    {expense.source}
+                                  </p>
+                                  <Badge variant={expense.status === "paid" ? "success" : "warning"}>
+                                    {expense.status}
+                                  </Badge>
+                                  <Badge variant="secondary">{expense.serviceProvider}</Badge>
+                                  <Badge variant="secondary">{expense.billingCycleType}</Badge>
+                                  {expense.criticalSystemFlag ? (
+                                    <Badge variant="danger">
+                                      CRITICAL COMPONENT DISCONNECTED — Action Required
+                                    </Badge>
+                                  ) : null}
+                                </div>
+                                <p className="mt-1 text-xs leading-5 text-slate-500">
+                                  {expense.description}
+                                  {expense.vendor ? ` · ${expense.vendor}` : ""}
+                                </p>
+                                <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-medium text-slate-500">
+                                  <span>
+                                    Due:{" "}
+                                    {expense.dueDate
+                                      ? new Date(expense.dueDate).toLocaleDateString("en-US", {
+                                          month: "short",
+                                          day: "numeric",
+                                          year: "numeric",
+                                        })
+                                      : "Not recorded"}
+                                  </span>
+                                  <span>
+                                    {expense.daysOverdue >= 0
+                                      ? `${expense.daysOverdue} day${expense.daysOverdue === 1 ? "" : "s"} overdue`
+                                      : "Not overdue"}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 flex-col gap-2 xl:items-end">
+                                <p className="text-lg font-bold text-slate-900">
+                                  {currencyFormatter.format(expense.amount)}
+                                </p>
+                                {expense.status === "unpaid" ? (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={() => void authorizeExpenseDisbursement(expense.id)}
+                                    disabled={
+                                      currentMember?.role !== "owner" ||
+                                      authorizingExpenseId === expense.id
+                                    }
+                                    className="w-full xl:w-auto"
+                                  >
+                                    {authorizingExpenseId === expense.id ? (
+                                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                                    ) : null}
+                                    Clear Invoice via Trust Retainer
+                                  </Button>
+                                ) : (
+                                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                                    Cleared
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="grid gap-3 rounded-2xl border border-border bg-slate-50/70 p-4 lg:grid-cols-4">

@@ -8,6 +8,17 @@ import type { WorkspaceRole } from "@/lib/workspaces"
 
 export const dynamic = "force-dynamic"
 
+const SERVICE_PROVIDERS = ["Namecheap", "Zoho", "Twilio", "Vercel"] as const
+const BILLING_CYCLE_TYPES = [
+  "Domain Renewal",
+  "Business Email Tier",
+  "API Consumption",
+  "Compute Allocation",
+] as const
+
+type ServiceProvider = (typeof SERVICE_PROVIDERS)[number]
+type BillingCycleType = (typeof BILLING_CYCLE_TYPES)[number]
+
 function asNumber(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) return value
   if (typeof value === "string") {
@@ -30,6 +41,50 @@ function asTimestampString(value: unknown): string | null {
   return null
 }
 
+function normalizeServiceProvider(data: Record<string, unknown>): ServiceProvider {
+  const raw = [data.serviceProvider, data.vendor, data.source, data.description]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase()
+
+  if (raw.includes("zoho")) return "Zoho"
+  if (raw.includes("twilio")) return "Twilio"
+  if (raw.includes("vercel")) return "Vercel"
+  return "Namecheap"
+}
+
+function normalizeBillingCycleType(
+  data: Record<string, unknown>,
+  serviceProvider: ServiceProvider
+): BillingCycleType {
+  const raw = [data.billingCycleType, data.category, data.source, data.description]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase()
+
+  if (raw.includes("email") || raw.includes("mail") || serviceProvider === "Zoho") {
+    return "Business Email Tier"
+  }
+  if (raw.includes("api") || raw.includes("sms") || serviceProvider === "Twilio") {
+    return "API Consumption"
+  }
+  if (raw.includes("compute") || raw.includes("hosting") || serviceProvider === "Vercel") {
+    return "Compute Allocation"
+  }
+  return "Domain Renewal"
+}
+
+function calculateDaysOverdue(dueDate: string | null) {
+  if (!dueDate) return -1
+  const due = new Date(dueDate)
+  if (Number.isNaN(due.getTime())) return -1
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const startOfDueDate = new Date(due)
+  startOfDueDate.setHours(0, 0, 0, 0)
+  return Math.floor((startOfToday.getTime() - startOfDueDate.getTime()) / 86400000)
+}
+
 function normalizeExpense(id: string, data: Record<string, unknown>) {
   const source =
     typeof data.source === "string" && data.source.trim()
@@ -40,8 +95,11 @@ function normalizeExpense(id: string, data: Record<string, unknown>) {
       ? data.description.trim()
       : source
   const status = data.status === "paid" ? "paid" : "unpaid"
+  const serviceProvider = normalizeServiceProvider(data)
+  const dueDate = asTimestampString(data.dueDate)
+  const daysOverdue = calculateDaysOverdue(dueDate)
 
-  return {
+  const expense = {
     id,
     source,
     description,
@@ -53,9 +111,18 @@ function normalizeExpense(id: string, data: Record<string, unknown>) {
       typeof data.category === "string" && data.category.trim()
         ? data.category.trim()
         : "infrastructure",
+    serviceProvider,
+    billingCycleType: normalizeBillingCycleType(data, serviceProvider),
     contractAppendageReady: Boolean(data.contractAppendageReady ?? true),
     createdAt: asTimestampString(data.createdAt),
+    dueDate,
     paidAt: asTimestampString(data.paidAt),
+  }
+
+  return {
+    ...expense,
+    daysOverdue,
+    criticalSystemFlag: expense.status === "unpaid" && daysOverdue >= 0,
   }
 }
 
@@ -171,6 +238,11 @@ export async function POST(
       transaction.set(ledgerRef, {
         expenseId: expense.id,
         source: expense.source,
+        serviceProvider: expense.serviceProvider,
+        billingCycleType: expense.billingCycleType,
+        dueDate: expense.dueDate,
+        daysOverdue: expense.daysOverdue,
+        criticalSystemFlag: expense.criticalSystemFlag,
         description,
         actorRole: auth.role,
         actorUid: auth.uid,
