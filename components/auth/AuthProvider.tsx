@@ -145,13 +145,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         pathname.startsWith("/signup/")
       const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/")
       const isDashboardRoute = pathname === "/dashboard" || pathname.startsWith("/dashboard/")
+      const isDebugRoute = pathname === "/debug" || pathname.startsWith("/debug/")
 
       if (
         mergedIds.length === 0 &&
         !isClaimRoute &&
         !isAuthRoute &&
         !isAdminRoute &&
-        !isDashboardRoute
+        !isDashboardRoute &&
+        !isDebugRoute
       ) {
         router.replace("/claim-workspace")
         return
@@ -370,8 +372,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           pathname.startsWith("/signup/")
         const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/")
         const isDashboardRoute = pathname === "/dashboard" || pathname.startsWith("/dashboard/")
+        const isDebugRoute = pathname === "/debug" || pathname.startsWith("/debug/")
 
-        if (!isClaimRoute && !isAuthRoute && !isAdminRoute && !isDashboardRoute) {
+        if (!isClaimRoute && !isAuthRoute && !isAdminRoute && !isDashboardRoute && !isDebugRoute) {
           router.replace("/claim-workspace")
         }
         setLoading(false)
