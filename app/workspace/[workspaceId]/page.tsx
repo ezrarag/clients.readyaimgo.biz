@@ -263,6 +263,26 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
   currency: "USD",
 })
 
+const AGENCY_VALUATION_BENCHMARKS = [
+  {
+    label: "Enterprise Product Discovery & Data Engineering Sprint",
+    value: 12500,
+  },
+  {
+    label: "Custom Multi-Tenant Next.js Software Architecture",
+    value: 8500,
+  },
+  {
+    label: "Real-Time Open Data Data Pipeline Integration",
+    value: 6000,
+  },
+]
+
+const TOTAL_AGENCY_PRODUCTION_EQUITY = AGENCY_VALUATION_BENCHMARKS.reduce(
+  (sum, item) => sum + item.value,
+  0
+)
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function apiFetch<T>(
@@ -700,6 +720,7 @@ export default function WorkspacePage() {
   const [processingPayment, setProcessingPayment] = useState(false)
   const [payingDeliverableId, setPayingDeliverableId] = useState<string | null>(null)
   const [authorizingExpenseId, setAuthorizingExpenseId] = useState<string | null>(null)
+  const [analyzingLedger, setAnalyzingLedger] = useState(false)
   // Active tab — read from URL on mount so Stripe can redirect back to ?tab=payments
   const [activeTab, setActiveTab] = useState("projects")
   // AI contract draft dialog
@@ -1201,6 +1222,36 @@ export default function WorkspacePage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to open billing portal.")
       setProcessingPayment(false)
+    }
+  }
+
+  const handleAnalyzeLedger = async () => {
+    if (!user || analyzingLedger) return
+    setAnalyzingLedger(true)
+    setError(null)
+    setMessage(null)
+    try {
+      const res = await apiFetch<{
+        success: boolean
+        receipts: Array<{ id: string }>
+        analyzedSignals?: number
+        message?: string
+      }>(user, `/api/workspaces/${params.workspaceId}/ledger/analyze`, {
+        method: "POST",
+        body: JSON.stringify({ source: "manual-reload" }),
+      })
+      if (res.receipts.length > 0) {
+        setMessage(
+          `AI ledger analysis created ${res.receipts.length} receipt${res.receipts.length === 1 ? "" : "s"} from ${res.analyzedSignals ?? "available"} commit signal${res.analyzedSignals === 1 ? "" : "s"}.`
+        )
+      } else {
+        setMessage(res.message ?? "AI ledger analysis found no new receipt rows.")
+      }
+      void load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to analyze commit ledger.")
+    } finally {
+      setAnalyzingLedger(false)
     }
   }
 
@@ -2936,16 +2987,43 @@ export default function WorkspacePage() {
                       </Button>
                     )}
                   </CardHeader>
-                  <CardContent className="grid gap-4 md:grid-cols-[1.3fr_0.7fr]">
+                  <CardContent className="grid gap-4 lg:grid-cols-[1fr_1.2fr_0.8fr]">
                     {/* Current Trust Balance */}
                     <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-5">
                       <p className="flex items-center text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
-                        Current Trust Balance
+                        Total Escrow Retainer Account Balance
                         <InfoTooltip text="Workspace-held retainer balance mirrored from the canonical workspace financial state." />
                       </p>
                       <p className="mt-3 text-4xl font-bold tracking-tight text-slate-950">
                         {currencyFormatter.format(paymentData.retainerBalance)}
                       </p>
+                    </div>
+                    {/* Enterprise value reference matrix */}
+                    <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-5">
+                      <p className="flex items-center text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
+                        Enterprise Valuation Benchmarks
+                        <InfoTooltip text="Internal agency-floor valuation references used to contextualize the software production represented in the trust ledger." />
+                      </p>
+                      <div className="mt-4 space-y-3">
+                        {AGENCY_VALUATION_BENCHMARKS.map((item) => (
+                          <div key={item.label} className="rounded-xl bg-white/70 px-3 py-2">
+                            <p className="text-xs font-semibold leading-5 text-slate-800">
+                              {item.label}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              {currencyFormatter.format(item.value)} standard agency floor value
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-4 border-t border-amber-200/70 pt-4">
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                          Total Equivalent Agency Production Equity Delivered
+                        </p>
+                        <p className="mt-1 text-2xl font-bold text-slate-950">
+                          {currencyFormatter.format(TOTAL_AGENCY_PRODUCTION_EQUITY)}
+                        </p>
+                      </div>
                     </div>
                     {/* Stripe Receipts */}
                     <div className="rounded-2xl border border-border bg-white/80 p-5">
@@ -3050,11 +3128,46 @@ export default function WorkspacePage() {
                 {/* ── 4 & 5. Ledger + History — conditionally rendered ──── */}
                 {/* When BOTH arrays are empty, show a single unified placeholder
                     instead of two skeleton cards cluttering the viewport.       */}
+                <Card>
+                  <CardHeader className="flex flex-row items-start justify-between gap-4">
+                    <div>
+                      <CardTitle className="flex items-center">
+                        AI Git Commit Ledger
+                        <InfoTooltip text="Analyzes connected GitHub, Vercel, and workspace project signals into trust-accounting receipt rows." />
+                      </CardTitle>
+                      <CardDescription>
+                        Generate auto-receipts from the latest connected development activity.
+                      </CardDescription>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleAnalyzeLedger}
+                      disabled={analyzingLedger}
+                    >
+                      {analyzingLedger ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-2 h-4 w-4" />
+                      )}
+                      {analyzingLedger ? "Analyzing" : "Refresh AI Ledger"}
+                    </Button>
+                  </CardHeader>
+                </Card>
+
                 {paymentData.ledger.length === 0 && paymentData.payments.length === 0 ? (
-                  <p className="px-1 text-sm leading-6 text-slate-500">
-                    Your workspace trust ledger is active. Transaction records, deductions,
-                    and payment histories will populate here as work milestones are executed.
-                  </p>
+                  <Card>
+                    <CardContent className="flex flex-col items-center justify-center px-6 py-12 text-center">
+                      <Receipt className="mb-3 h-8 w-8 text-slate-300" />
+                      <p className="text-sm font-semibold text-slate-700">
+                        Your workspace trust ledger is active.
+                      </p>
+                      <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
+                        Transaction records, deductions, and payment histories will populate
+                        here as work milestones are executed.
+                      </p>
+                    </CardContent>
+                  </Card>
                 ) : (
                   <>
                     {/* ── Ledger Drawdown Statements (hidden when empty) ─── */}
