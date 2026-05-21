@@ -48,6 +48,9 @@ function normalizeLedgerEntry(id: string, data: Record<string, unknown>) {
   const deductionAmount = asNumber(
     data.deductionAmount ?? data.deductionThreshold ?? data.drawdownAmount ?? data.amount
   )
+  const valueAllocationAmount = asNumber(
+    data.valueAllocationAmount ?? data.agencyValueAmount ?? data.productionEquityAmount
+  )
 
   return {
     id,
@@ -55,6 +58,34 @@ function normalizeLedgerEntry(id: string, data: Record<string, unknown>) {
     description,
     actorRole,
     deductionAmount,
+    valueAllocationAmount: valueAllocationAmount || deductionAmount,
+    benchmarkCategory:
+      typeof data.benchmarkCategory === "string" && data.benchmarkCategory.trim()
+        ? data.benchmarkCategory.trim()
+        : null,
+    sourceRepository:
+      typeof data.sourceRepository === "string" && data.sourceRepository.trim()
+        ? data.sourceRepository.trim()
+        : null,
+    sourceBranchDepth:
+      typeof data.sourceBranchDepth === "string" && data.sourceBranchDepth.trim()
+        ? data.sourceBranchDepth.trim()
+        : null,
+    vercelDeploymentId:
+      typeof data.vercelDeploymentId === "string" && data.vercelDeploymentId.trim()
+        ? data.vercelDeploymentId.trim()
+        : null,
+    hostingPlatformConfiguration:
+      typeof data.hostingPlatformConfiguration === "string" &&
+      data.hostingPlatformConfiguration.trim()
+        ? data.hostingPlatformConfiguration.trim()
+        : null,
+    verifiedDataStructureLines: asNumber(data.verifiedDataStructureLines),
+    municipalEndpointMaps: Array.isArray(data.municipalEndpointMaps)
+      ? (data.municipalEndpointMaps as unknown[]).filter(
+          (item): item is string => typeof item === "string" && item.trim().length > 0
+        )
+      : [],
   }
 }
 

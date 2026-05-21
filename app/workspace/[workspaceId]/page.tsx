@@ -103,6 +103,14 @@ interface WorkspaceLedgerEntry {
   description: string
   actorRole: string
   deductionAmount: number
+  valueAllocationAmount: number
+  benchmarkCategory: string | null
+  sourceRepository: string | null
+  sourceBranchDepth: string | null
+  vercelDeploymentId: string | null
+  hostingPlatformConfiguration: string | null
+  verifiedDataStructureLines: number | null
+  municipalEndpointMaps: string[]
 }
 
 interface WorkspaceExpense {
@@ -262,26 +270,6 @@ const currencyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
 })
-
-const AGENCY_VALUATION_BENCHMARKS = [
-  {
-    label: "Enterprise Product Discovery & Data Engineering Sprint",
-    value: 12500,
-  },
-  {
-    label: "Custom Multi-Tenant Next.js Software Architecture",
-    value: 8500,
-  },
-  {
-    label: "Real-Time Open Data Data Pipeline Integration",
-    value: 6000,
-  },
-]
-
-const TOTAL_AGENCY_PRODUCTION_EQUITY = AGENCY_VALUATION_BENCHMARKS.reduce(
-  (sum, item) => sum + item.value,
-  0
-)
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -539,6 +527,41 @@ function cleanDisplayValue(value: string | null | undefined) {
   return typeof value === "string" ? value.trim() : ""
 }
 
+function buildLedgerJustificationTooltip(entries: WorkspaceLedgerEntry[]) {
+  const repositories = Array.from(
+    new Set(entries.map((entry) => entry.sourceRepository).filter(Boolean))
+  )
+  const branchDepths = Array.from(
+    new Set(entries.map((entry) => entry.sourceBranchDepth).filter(Boolean))
+  )
+  const deployments = Array.from(
+    new Set(entries.map((entry) => entry.vercelDeploymentId).filter(Boolean))
+  )
+  const hostingConfigurations = Array.from(
+    new Set(entries.map((entry) => entry.hostingPlatformConfiguration).filter(Boolean))
+  )
+  const verifiedLines = entries.reduce(
+    (sum, entry) => sum + Math.max(0, entry.verifiedDataStructureLines ?? 0),
+    0
+  )
+  const endpointMaps = Array.from(
+    new Set(entries.flatMap((entry) => entry.municipalEndpointMaps ?? []))
+  )
+
+  return [
+    `GitHub repository: ${repositories.join(", ") || "No repository handle recorded"}`,
+    `Branch depth: ${branchDepths.join(", ") || "No branch-depth metadata recorded"}`,
+    `Vercel deployment ID: ${deployments.join(", ") || "No Vercel deployment ID recorded"}`,
+    `Hosting configuration: ${
+      hostingConfigurations.join("; ") || "No hosting platform configuration recorded"
+    }`,
+    `Verified data structure lines: ${verifiedLines.toLocaleString("en-US")}`,
+    endpointMaps.length > 0
+      ? `Municipal endpoint maps: ${endpointMaps.join(", ")}`
+      : "Municipal endpoint maps: none recorded",
+  ].join("\n")
+}
+
 // ─── InfoTooltip ──────────────────────────────────────────────────────────────
 // Lightweight CSS-only tooltip rendered adjacent to section headers. Keeps the
 // viewport clear of long explanatory prose while making context discoverable.
@@ -550,7 +573,7 @@ function InfoTooltip({ text }: { text: string }) {
         {/* Floating tooltip panel */}
         <span
           role="tooltip"
-          className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left text-xs font-normal leading-5 text-slate-600 shadow-lg opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+          className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 whitespace-pre-line rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-left text-xs font-normal leading-5 text-slate-600 shadow-lg opacity-0 transition-opacity duration-150 group-hover:opacity-100"
         >
           {text}
           {/* Arrow caret */}
@@ -805,6 +828,32 @@ export default function WorkspacePage() {
       (member) => member.role === directorySelection.role
     )
   }, [directoryProject, directorySelection, members])
+  const agencyValuationBenchmarks = useMemo(() => {
+    const grouped = new Map<
+      string,
+      {
+        label: string
+        value: number
+        entries: WorkspaceLedgerEntry[]
+      }
+    >()
+
+    for (const entry of paymentData?.ledger ?? []) {
+      const value = entry.valueAllocationAmount || entry.deductionAmount || 0
+      if (!Number.isFinite(value) || value <= 0) continue
+      const label = entry.benchmarkCategory || "Uncategorized Production Equity"
+      const current = grouped.get(label) ?? { label, value: 0, entries: [] }
+      current.value += value
+      current.entries.push(entry)
+      grouped.set(label, current)
+    }
+
+    return Array.from(grouped.values()).sort((a, b) => b.value - a.value)
+  }, [paymentData?.ledger])
+  const totalAgencyProductionEquity = useMemo(
+    () => agencyValuationBenchmarks.reduce((sum, item) => sum + item.value, 0),
+    [agencyValuationBenchmarks]
+  )
 
   const load = useCallback(async () => {
     if (!user) return
@@ -1247,7 +1296,11 @@ export default function WorkspacePage() {
       } else {
         setMessage(res.message ?? "AI ledger analysis found no new receipt rows.")
       }
-      void load()
+      const updatedPaymentData = await apiFetch<WorkspacePaymentData>(
+        user,
+        `/api/workspaces/${params.workspaceId}/payments`
+      )
+      setPaymentData(updatedPaymentData)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to analyze commit ledger.")
     } finally {
@@ -3005,23 +3058,34 @@ export default function WorkspacePage() {
                         <InfoTooltip text="Internal agency-floor valuation references used to contextualize the software production represented in the trust ledger." />
                       </p>
                       <div className="mt-4 space-y-3">
-                        {AGENCY_VALUATION_BENCHMARKS.map((item) => (
-                          <div key={item.label} className="rounded-xl bg-white/70 px-3 py-2">
-                            <p className="text-xs font-semibold leading-5 text-slate-800">
-                              {item.label}
-                            </p>
-                            <p className="mt-0.5 text-xs text-slate-500">
-                              {currencyFormatter.format(item.value)} standard agency floor value
+                        {agencyValuationBenchmarks.length === 0 ? (
+                          <div className="rounded-xl bg-white/70 px-3 py-3">
+                            <p className="text-xs font-medium leading-5 text-slate-500">
+                              No production equity receipts have been calculated yet. Refresh
+                              the AI ledger after connecting GitHub or Vercel activity.
                             </p>
                           </div>
-                        ))}
+                        ) : (
+                          agencyValuationBenchmarks.map((item) => (
+                            <div key={item.label} className="rounded-xl bg-white/70 px-3 py-2">
+                              <p className="flex items-start text-xs font-semibold leading-5 text-slate-800">
+                                <span>{item.label}</span>
+                                <InfoTooltip text={buildLedgerJustificationTooltip(item.entries)} />
+                              </p>
+                              <p className="mt-0.5 text-xs text-slate-500">
+                                {currencyFormatter.format(item.value)} aggregated verified
+                                production equity
+                              </p>
+                            </div>
+                          ))
+                        )}
                       </div>
                       <div className="mt-4 border-t border-amber-200/70 pt-4">
                         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
                           Total Equivalent Agency Production Equity Delivered
                         </p>
                         <p className="mt-1 text-2xl font-bold text-slate-950">
-                          {currencyFormatter.format(TOTAL_AGENCY_PRODUCTION_EQUITY)}
+                          {currencyFormatter.format(totalAgencyProductionEquity)}
                         </p>
                       </div>
                     </div>

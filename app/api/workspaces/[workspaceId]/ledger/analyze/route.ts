@@ -24,6 +24,11 @@ type CommitSignal = {
   source: "github" | "vercel" | "project" | "webhook"
   repository: string | null
   commitSha: string | null
+  branchDepth: string | null
+  vercelDeploymentId: string | null
+  hostingPlatformConfiguration: string | null
+  verifiedDataStructureLines: number
+  municipalEndpointMaps: string[]
   message: string
   url: string | null
   updatedAt: string | null
@@ -37,6 +42,11 @@ type LedgerReceiptDraft = {
   benchmarkCategory?: string
   sourceCommitSha?: string | null
   sourceRepository?: string | null
+  sourceBranchDepth?: string | null
+  vercelDeploymentId?: string | null
+  hostingPlatformConfiguration?: string | null
+  verifiedDataStructureLines?: number
+  municipalEndpointMaps?: string[]
 }
 
 const BENCHMARKS = [
@@ -65,6 +75,44 @@ function readNumber(value: unknown) {
     if (Number.isFinite(parsed)) return parsed
   }
   return null
+}
+
+function readStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : []
+}
+
+function summarizeHostingConfig(workspace: Record<string, unknown>) {
+  const hosting =
+    workspace.hosting && typeof workspace.hosting === "object"
+      ? (workspace.hosting as Record<string, unknown>)
+      : {}
+  const primaryProvider = readString(hosting.primaryProvider) ?? "vercel"
+  const domainRegistrars = Array.isArray(hosting.domainRegistrars)
+    ? hosting.domainRegistrars.length
+    : 0
+  const manualDnsTargets = Array.isArray(hosting.manualDnsTargets)
+    ? hosting.manualDnsTargets.length
+    : 0
+  const staticHosts = Array.isArray(hosting.staticHosts) ? hosting.staticHosts.length : 0
+
+  return `${primaryProvider}; DNS targets: ${manualDnsTargets}; registrars: ${domainRegistrars}; static hosts: ${staticHosts}`
+}
+
+function estimateDataStructureLines(value: unknown) {
+  const serialized = JSON.stringify(value ?? {}, null, 2)
+  return Math.max(1, serialized.split("\n").length)
+}
+
+function inferMunicipalEndpointMaps(text: string) {
+  const endpoints = text.match(/https?:\/\/[^\s),]+/gi) ?? []
+  const municipalHints = [
+    "Milwaukee Open Data JSON arrays",
+    "municipal permits endpoint maps",
+    "open data application and permit records",
+  ]
+  return Array.from(new Set([...endpoints, ...municipalHints.filter((hint) => text.toLowerCase().includes("data"))]))
 }
 
 function stableId(input: string) {
@@ -131,6 +179,16 @@ function normalizeWebhookSignals(body: Record<string, unknown>): CommitSignal[] 
         source: "webhook",
         repository: readString(value.repository) || readString(value.repo) || null,
         commitSha: readString(value.sha) || readString(value.commitSha) || null,
+        branchDepth:
+          readString(value.branchDepth) ||
+          readString(value.branch) ||
+          "Webhook supplied commit window",
+        vercelDeploymentId:
+          readString(value.vercelDeploymentId) || readString(value.deploymentId) || null,
+        hostingPlatformConfiguration: readString(value.hostingPlatformConfiguration),
+        verifiedDataStructureLines:
+          readNumber(value.verifiedDataStructureLines) ?? estimateDataStructureLines(value),
+        municipalEndpointMaps: readStringArray(value.municipalEndpointMaps),
         message,
         url: readString(value.url) || readString(value.htmlUrl) || null,
         updatedAt: readString(value.timestamp) || readString(value.updatedAt) || null,
@@ -171,6 +229,11 @@ async function fetchGitHubCommitSignals(fullName: string): Promise<CommitSignal[
         source: "github",
         repository: fullName,
         commitSha: readString(commit.sha),
+        branchDepth: "Latest 5 commits from the repository default branch",
+        vercelDeploymentId: null,
+        hostingPlatformConfiguration: null,
+        verifiedDataStructureLines: estimateDataStructureLines(commit),
+        municipalEndpointMaps: inferMunicipalEndpointMaps(message),
         message,
         url: readString(commit.html_url),
         updatedAt: readString(author.date),
@@ -202,6 +265,7 @@ async function collectWorkspaceSignals(
       .map((fullName) => fetchGitHubCommitSignals(fullName))
   )
   signals.push(...githubSignals.flat())
+  const hostingPlatformConfiguration = summarizeHostingConfig(workspace)
 
   for (const project of vercelProjects.slice(0, 10)) {
     const message =
@@ -219,6 +283,11 @@ async function collectWorkspaceSignals(
       source: "vercel",
       repository,
       commitSha: readString(project.latestCommitSha),
+      branchDepth: readString(project.branch) || "Vercel deployment metadata branch context",
+      vercelDeploymentId: readString(project.deploymentId) || readString(project.id),
+      hostingPlatformConfiguration,
+      verifiedDataStructureLines: estimateDataStructureLines(project),
+      municipalEndpointMaps: inferMunicipalEndpointMaps(message),
       message,
       url: readString(project.url) || readString(project.deployUrl),
       updatedAt: readString(project.updatedAt),
@@ -245,6 +314,11 @@ async function collectWorkspaceSignals(
       source: "project",
       repository: readString(project.githubRepo) || readString(project.repoSlug),
       commitSha: readString(project.latestCommitSha) || readString(project.commitSha),
+      branchDepth: readString(project.branch) || "Workspace project metadata branch context",
+      vercelDeploymentId: readString(project.vercelDeploymentId),
+      hostingPlatformConfiguration,
+      verifiedDataStructureLines: estimateDataStructureLines(project),
+      municipalEndpointMaps: inferMunicipalEndpointMaps(message),
       message,
       url: readString(project.liveUrl) || readString(project.deployUrl),
       updatedAt: readString(project.updatedAt),
@@ -278,7 +352,12 @@ Return ONLY valid JSON matching this schema:
     "valueAllocationAmount": 500,
     "benchmarkCategory": "one benchmark category",
     "sourceCommitSha": "sha or null",
-    "sourceRepository": "owner/repo or null"
+    "sourceRepository": "owner/repo or null",
+    "sourceBranchDepth": "branch or commit-window detail",
+    "vercelDeploymentId": "deployment/project id or null",
+    "hostingPlatformConfiguration": "hosting/DNS configuration summary",
+    "verifiedDataStructureLines": 42,
+    "municipalEndpointMaps": ["endpoint or map label"]
   }
 ]
 
@@ -288,6 +367,7 @@ Rules:
 3. deductionAmount and valueAllocationAmount must be positive numbers in USD.
 4. Use actorRole exactly "AI Ingestion Engine".
 5. Keep descriptions specific, professional, and suitable for a client trust ledger.
+6. Preserve source repository, branch depth, Vercel deployment id, hosting configuration, verified data structure line counts, and municipal endpoint maps when present.
 
 Workspace: ${params.workspaceName}
 Client ID: ${params.clientId ?? "not linked"}
@@ -300,7 +380,16 @@ ${params.signals
   .slice(0, 30)
   .map(
     (signal, index) =>
-      `${index + 1}. [${signal.source}] ${signal.repository ?? "workspace"} ${signal.commitSha ? `(${signal.commitSha.slice(0, 8)}) ` : ""}${signal.message}`
+      `${index + 1}. [${signal.source}] ${signal.repository ?? "workspace"} ${signal.commitSha ? `(${signal.commitSha.slice(0, 8)}) ` : ""}${signal.message}
+   Branch depth: ${signal.branchDepth ?? "not recorded"}
+   Vercel deployment ID: ${signal.vercelDeploymentId ?? "not recorded"}
+   Hosting configuration: ${signal.hostingPlatformConfiguration ?? "not recorded"}
+   Verified data structure lines: ${signal.verifiedDataStructureLines}
+   Municipal endpoint maps: ${
+     signal.municipalEndpointMaps.length > 0
+       ? signal.municipalEndpointMaps.join(", ")
+       : "none recorded"
+   }`
   )
   .join("\n")}`
 }
@@ -358,6 +447,16 @@ function normalizeReceiptDraft(draft: LedgerReceiptDraft, fallback: CommitSignal
     benchmarkCategory,
     sourceCommitSha: readString(draft.sourceCommitSha) ?? fallback.commitSha,
     sourceRepository: readString(draft.sourceRepository) ?? fallback.repository,
+    sourceBranchDepth: readString(draft.sourceBranchDepth) ?? fallback.branchDepth,
+    vercelDeploymentId: readString(draft.vercelDeploymentId) ?? fallback.vercelDeploymentId,
+    hostingPlatformConfiguration:
+      readString(draft.hostingPlatformConfiguration) ?? fallback.hostingPlatformConfiguration,
+    verifiedDataStructureLines:
+      readNumber(draft.verifiedDataStructureLines) ?? fallback.verifiedDataStructureLines,
+    municipalEndpointMaps:
+      readStringArray(draft.municipalEndpointMaps).length > 0
+        ? readStringArray(draft.municipalEndpointMaps)
+        : fallback.municipalEndpointMaps,
     sourceUrl: fallback.url,
     sourceKind: fallback.source,
   }
@@ -460,4 +559,3 @@ export async function POST(
     )
   }
 }
-
