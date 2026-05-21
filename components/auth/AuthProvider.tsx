@@ -186,7 +186,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    const unsubscribe = onAuthStateChanged(getAuthInstance(), async (nextUser) => {
+    let auth
+    try {
+      auth = getAuthInstance()
+    } catch (error) {
+      console.error("AuthProvider: Firebase Auth could not initialize:", error)
+      setUser(null)
+      setBeamUser(null)
+      setEffectiveRoles([])
+      setWorkspaceIds([])
+      setPrimaryWorkspaceId(null)
+      setWorkspaceRole(null)
+      setLoading(false)
+      return
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
       clearLiveProfileListeners()
       setLoading(true)
       setUser(nextUser)
