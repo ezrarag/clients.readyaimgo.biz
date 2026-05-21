@@ -25,6 +25,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { HelpMark } from "@/components/ui/help-mark"
 import { signOut } from "@/lib/firebase/auth"
 import type { Workspace } from "@/lib/workspaces"
 
@@ -295,7 +296,12 @@ export default function DashboardPage() {
   return (
     <AppShell
       eyebrow="Client Hub"
-      title="Your Workspaces"
+      title={
+        <>
+          Your Workspaces
+          <HelpMark text="Workspaces are business containers that bind projects, contracts, retainers, utilities, and team access to one client account." />
+        </>
+      }
       description="Each workspace represents a single target framework. We assemble the documentation, financial rails, and asset metrics required to track our production against your expectations."
       nav={[{ href: "/dashboard", label: "Workspaces", active: true }]}
       actions={

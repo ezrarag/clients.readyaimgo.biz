@@ -12,7 +12,7 @@ interface NavItem {
 }
 
 interface AppShellProps {
-  title: string
+  title: ReactNode
   description: string
   eyebrow?: string
   nav: NavItem[]
@@ -65,7 +65,7 @@ export function AppShell({
               <p className="text-xs font-semibold uppercase tracking-[0.32em] text-slate-500">
                 {eyebrow}
               </p>
-              <h1 className="font-display text-balance text-4xl font-semibold leading-tight text-slate-950 sm:text-5xl">
+              <h1 className="flex flex-wrap items-center gap-3 font-display text-balance text-4xl font-semibold leading-tight text-slate-950 sm:text-5xl">
                 {title}
               </h1>
               <p className="max-w-2xl text-base leading-7 text-slate-600 sm:text-lg">

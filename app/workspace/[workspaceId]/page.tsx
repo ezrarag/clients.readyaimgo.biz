@@ -51,6 +51,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { HelpMark } from "@/components/ui/help-mark"
 import { ContractCard } from "@/components/contracts/ContractCard"
 import { ContractDetailModal } from "@/components/contracts/ContractDetailModal"
 import { getStorageInstance } from "@/lib/firebase/config"
@@ -178,6 +179,7 @@ interface WorkspaceProject {
   description?: string
   summary?: string
   projectType?: string
+  assetProjectType?: AssetProjectType
   /** "github-connection" | "vercel-connection" for synthesized entries; absent on Firestore records */
   source?: string
   repository?: { fullName?: string; url?: string } | null
@@ -194,9 +196,14 @@ interface WorkspaceProject {
   scopeObjectives?: Array<{ id?: string; title?: string; description?: string }>
   launchObjectives?: Array<{ id?: string; title?: string; description?: string }>
   deliverables?: string[]
+  fleetIds?: string[]
+  mileageTotal?: number
+  propertyLocations?: Array<{ label?: string; latitude?: number; longitude?: number }>
   updatedAt?: string
   createdAt?: string
 }
+
+type AssetProjectType = "webdev" | "participant" | "transportation" | "real-estate"
 
 interface WorkspaceProjectTask {
   id: string
@@ -436,6 +443,40 @@ function projectRepositoryUrl(project: WorkspaceProject) {
 function projectCommitLabel(project: WorkspaceProject) {
   const sha = project.latestCommitSha || project.commitSha
   return sha ? sha.slice(0, 7) : "commit pending"
+}
+
+const ASSET_PROJECT_TYPES: Array<{ value: AssetProjectType; label: string }> = [
+  { value: "webdev", label: "Web Development" },
+  { value: "participant", label: "Participant Cohort" },
+  { value: "transportation", label: "Transportation Asset" },
+  { value: "real-estate", label: "Real Estate Portfolio" },
+]
+
+function parseAssetProjectType(value: unknown): AssetProjectType {
+  return value === "participant" ||
+    value === "transportation" ||
+    value === "real-estate" ||
+    value === "webdev"
+    ? value
+    : "webdev"
+}
+
+function fleetIdsForProject(project: WorkspaceProject) {
+  if (Array.isArray(project.fleetIds) && project.fleetIds.length > 0) return project.fleetIds
+  return [`FLT-${project.id.replace(/[^a-z0-9]/gi, "").slice(0, 5).toUpperCase() || "001"}`]
+}
+
+function propertyLocationsForProject(project: WorkspaceProject) {
+  if (Array.isArray(project.propertyLocations) && project.propertyLocations.length > 0) {
+    return project.propertyLocations
+  }
+  return [
+    {
+      label: projectTitle(project),
+      latitude: 43.0389,
+      longitude: -87.9065,
+    },
+  ]
 }
 
 function isLegacyGithubProject(project: WorkspaceProject) {
@@ -799,6 +840,8 @@ export default function WorkspacePage() {
   const [draftResult, setDraftResult] = useState<GeneratedDraft | null>(null)
   const [repoQuery, setRepoQuery] = useState("")
   const [vercelQuery, setVercelQuery] = useState("")
+  const [projectTypeOverrides, setProjectTypeOverrides] = useState<Record<string, AssetProjectType>>({})
+  const [showEcosystemSearch, setShowEcosystemSearch] = useState(false)
   const [savingHosting, setSavingHosting] = useState(false)
   const [savingConnectors, setSavingConnectors] = useState(false)
   const [githubMeta, setGithubMeta] = useState<ConnectorMeta | null>(null)
@@ -1236,12 +1279,15 @@ export default function WorkspacePage() {
     setDrafting(true)
     setError(null)
     setDraftResult(null)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 90000)
     try {
       const res = await apiFetch<{
         contractId: string
         draft: GeneratedDraft
       }>(user, "/api/contracts/draft", {
         method: "POST",
+        signal: controller.signal,
         body: JSON.stringify({
           workspaceId: params.workspaceId,
           ...draftForm,
@@ -1278,13 +1324,21 @@ export default function WorkspacePage() {
         beamNgos: [],
       }
       setContracts((prev) => [newContract, ...prev])
-      setDraftResult(res.draft)
+      setDraftResult(null)
+      setDraftForm(DRAFT_FORM_DEFAULTS)
       setDraftDialogOpen(false)
       setMessage("Draft generated and saved. Review it in the Contracts list.")
       setTimeout(() => setMessage(null), 6000)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to generate draft.")
+      setError(
+        err instanceof DOMException && err.name === "AbortError"
+          ? "AI draft generation timed out. Please try again with a shorter prompt."
+          : err instanceof Error
+            ? err.message
+            : "Unable to generate draft."
+      )
     } finally {
+      window.clearTimeout(timeout)
       setDrafting(false)
     }
   }
@@ -1838,6 +1892,12 @@ export default function WorkspacePage() {
         {/* ── Child Projects ── */}
         <TabsContent value="projects">
           <div className="space-y-6">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Projects
+              </h2>
+              <HelpMark text="Project cards are multi-asset containers. Switch the selector to view code delivery, participant cohorts, transportation assets, or property locations without exposing irrelevant technical strings." />
+            </div>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {projectCards.length === 0 ? (
                 <Card className="md:col-span-2 xl:col-span-3">
@@ -1855,6 +1915,9 @@ export default function WorkspacePage() {
                   const repositoryLabel = projectRepositoryLabel(project)
                   const repositoryUrl = projectRepositoryUrl(project)
                   const projectMembers = membersForProject(project, members)
+                  const assetType =
+                    projectTypeOverrides[project.id] ??
+                    parseAssetProjectType(project.assetProjectType ?? project.projectType)
                   return (
                     <Card
                       key={project.id}
@@ -1868,9 +1931,23 @@ export default function WorkspacePage() {
                               Business Reference: {workspaceBusinessReference(workspace)}
                             </CardDescription>
                           </div>
-                          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusTone(project.status)}`}>
-                            {project.status || "active"}
-                          </span>
+                          <select
+                            value={assetType}
+                            onChange={(event) =>
+                              setProjectTypeOverrides((prev) => ({
+                                ...prev,
+                                [project.id]: event.target.value as AssetProjectType,
+                              }))
+                            }
+                            className="h-8 shrink-0 rounded-full border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            title="Project asset type"
+                          >
+                            {ASSET_PROJECT_TYPES.map((type) => (
+                              <option key={type.value} value={type.value}>
+                                {type.label}
+                              </option>
+                            ))}
+                          </select>
                         </div>
                       </CardHeader>
                       <CardContent className="flex flex-1 flex-col">
@@ -1878,117 +1955,196 @@ export default function WorkspacePage() {
                           {projectSummary(project)}
                         </p>
 
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {project.projectType && !isLegacyGithubProject(project) ? (
-                            <Badge variant="secondary">{project.projectType}</Badge>
-                          ) : null}
-                          <Badge variant="secondary" className="gap-1">
-                            <Github className="h-3 w-3" />
-                            {projectCommitLabel(project)}
-                          </Badge>
-                          {project.vercelProjectId ? (
-                            <Badge variant="secondary" className="gap-1">
-                              <Server className="h-3 w-3" />
-                              Vercel
-                            </Badge>
-                          ) : null}
-                        </div>
-
-                        <div className="mt-4 grid gap-2 rounded-2xl border border-border bg-slate-50/70 p-3 text-xs">
-                          <div className="flex items-start justify-between gap-3">
-                            <span className="font-semibold uppercase tracking-[0.12em] text-slate-400">
-                              Repository
-                            </span>
-                            {repositoryUrl ? (
-                              <a
-                                href={repositoryUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="min-w-0 truncate text-right font-semibold text-slate-700 hover:text-primary"
-                              >
-                                {repositoryLabel}
-                              </a>
-                            ) : (
-                              <span className="text-right font-semibold text-slate-500">
-                                {repositoryLabel}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-start justify-between gap-3">
-                            <span className="font-semibold uppercase tracking-[0.12em] text-slate-400">
-                              Live URL
-                            </span>
-                            {url ? (
-                              <a
-                                href={url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="min-w-0 truncate text-right font-semibold text-slate-700 hover:text-primary"
-                              >
-                                {url.replace(/^https?:\/\//, "")}
-                              </a>
-                            ) : (
-                              <span className="font-semibold text-slate-500">Not deployed</span>
-                            )}
-                          </div>
-                          <div className="flex items-start justify-between gap-3">
-                            <span className="font-semibold uppercase tracking-[0.12em] text-slate-400">
-                              Branch / Commit
-                            </span>
-                            <span className="text-right font-semibold text-slate-700">
-                              {project.branch ? `${project.branch} / ` : ""}
-                              {projectCommitLabel(project)}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {repositoryUrl ? (
-                            <a href={repositoryUrl} target="_blank" rel="noreferrer">
-                              <Badge variant="secondary" className="gap-1 hover:bg-slate-100">
+                        {assetType === "webdev" ? (
+                          <>
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              <Badge variant="secondary" className="gap-1">
                                 <Github className="h-3 w-3" />
-                                Git
+                                {projectCommitLabel(project)}
                               </Badge>
-                            </a>
-                          ) : null}
-                          {url ? (
-                            <a href={url} target="_blank" rel="noreferrer">
-                              <Badge variant="secondary" className="gap-1 hover:bg-slate-100">
-                                <ExternalLink className="h-3 w-3" />
-                                Live
-                              </Badge>
-                            </a>
-                          ) : null}
-                        </div>
+                              {project.vercelProjectId ? (
+                                <Badge variant="secondary" className="gap-1">
+                                  <Server className="h-3 w-3" />
+                                  Vercel
+                                </Badge>
+                              ) : null}
+                            </div>
 
-                        <div className="mt-auto pt-5">
-                          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                            Directory
-                          </p>
-                          <div className="flex flex-wrap gap-2">
-                            {PROJECT_ROLE_ORDER.map((role) => {
-                              const roleMembers = projectMembers.filter((member) => member.role === role)
-                              if (roleMembers.length === 0) return null
-                              return (
-                                <button
-                                  key={role}
-                                  type="button"
-                                  onClick={() =>
-                                    setDirectorySelection({ role, projectId: project.id })
-                                  }
-                                  className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
-                                >
-                                  {roleDisplayLabel(role)} {roleMembers.length}
-                                </button>
-                              )
-                            })}
-                            {projectMembers.length === 0 ? (
-                              <span className="rounded-full border border-dashed border-slate-200 px-3 py-1 text-xs font-semibold text-slate-400">
-                                no assignments
-                              </span>
-                            ) : null}
+                            <div className="mt-4 grid gap-2 rounded-2xl border border-border bg-slate-50/70 p-3 text-xs">
+                              <div className="flex items-start justify-between gap-3">
+                                <span className="font-semibold uppercase tracking-[0.12em] text-slate-400">
+                                  Repository
+                                </span>
+                                {repositoryUrl ? (
+                                  <a
+                                    href={repositoryUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="min-w-0 truncate text-right font-semibold text-slate-700 hover:text-primary"
+                                  >
+                                    {repositoryLabel}
+                                  </a>
+                                ) : (
+                                  <span className="text-right font-semibold text-slate-500">
+                                    {repositoryLabel}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-start justify-between gap-3">
+                                <span className="font-semibold uppercase tracking-[0.12em] text-slate-400">
+                                  Live URL
+                                </span>
+                                {url ? (
+                                  <a
+                                    href={url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="min-w-0 truncate text-right font-semibold text-slate-700 hover:text-primary"
+                                  >
+                                    {url.replace(/^https?:\/\//, "")}
+                                  </a>
+                                ) : (
+                                  <span className="font-semibold text-slate-500">Not deployed</span>
+                                )}
+                              </div>
+                              <div className="flex items-start justify-between gap-3">
+                                <span className="font-semibold uppercase tracking-[0.12em] text-slate-400">
+                                  Branch / Commit
+                                </span>
+                                <span className="text-right font-semibold text-slate-700">
+                                  {project.branch ? `${project.branch} / ` : ""}
+                                  {projectCommitLabel(project)}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              {repositoryUrl ? (
+                                <a href={repositoryUrl} target="_blank" rel="noreferrer">
+                                  <Badge variant="secondary" className="gap-1 hover:bg-slate-100">
+                                    <Github className="h-3 w-3" />
+                                    Git
+                                  </Badge>
+                                </a>
+                              ) : null}
+                              {url ? (
+                                <a href={url} target="_blank" rel="noreferrer">
+                                  <Badge variant="secondary" className="gap-1 hover:bg-slate-100">
+                                    <ExternalLink className="h-3 w-3" />
+                                    Live
+                                  </Badge>
+                                </a>
+                              ) : null}
+                            </div>
+                          </>
+                        ) : null}
+
+                        {assetType === "participant" ? (
+                          <div className="mt-4 rounded-2xl border border-border bg-slate-50/70 p-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                              Candidate Cohort Registry
+                            </p>
+                            <div className="mt-3 grid gap-2">
+                              {PROJECT_ROLE_ORDER.map((role) => {
+                                const roleMembers = projectMembers.filter((member) => member.role === role)
+                                return (
+                                  <button
+                                    key={role}
+                                    type="button"
+                                    onClick={() => setDirectorySelection({ role, projectId: project.id })}
+                                    className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-left transition hover:bg-primary/5"
+                                  >
+                                    <span className="text-xs font-semibold text-slate-700">
+                                      {roleDisplayLabel(role)}
+                                    </span>
+                                    <span className="flex -space-x-1">
+                                      {roleMembers.slice(0, 4).map((member) => (
+                                        <span
+                                          key={member.uid}
+                                          className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-white bg-slate-200 text-[10px] font-bold text-slate-700"
+                                        >
+                                          {memberInitial(member)}
+                                        </span>
+                                      ))}
+                                      <span className="ml-2 text-xs font-semibold text-slate-500">
+                                        {roleMembers.length}
+                                      </span>
+                                    </span>
+                                  </button>
+                                )
+                              })}
+                            </div>
                           </div>
-                        </div>
+                        ) : null}
+
+                        {assetType === "transportation" ? (
+                          <div className="mt-4 rounded-2xl border border-border bg-slate-50/70 p-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                              Fleet Tracking Log
+                            </p>
+                            <div className="mt-3 grid gap-2">
+                              {fleetIdsForProject(project).map((fleetId, index) => (
+                                <div key={fleetId} className="rounded-xl bg-white px-3 py-2">
+                                  <p className="text-xs font-semibold text-slate-800">{fleetId}</p>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    Mileage tracked: {((project.mileageTotal ?? 0) + index * 125).toLocaleString("en-US")} mi
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {assetType === "real-estate" ? (
+                          <div className="mt-4 rounded-2xl border border-border bg-slate-50/70 p-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                              Portfolio Property Grid
+                            </p>
+                            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                              {propertyLocationsForProject(project).map((location, index) => (
+                                <div key={`${location.label}-${index}`} className="rounded-xl bg-white px-3 py-2">
+                                  <p className="text-xs font-semibold text-slate-800">
+                                    {location.label || `Property ${index + 1}`}
+                                  </p>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    {(location.latitude ?? 0).toFixed(4)}, {(location.longitude ?? 0).toFixed(4)}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {assetType !== "participant" ? (
+                          <div className="mt-auto pt-5">
+                            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                              Directory
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {PROJECT_ROLE_ORDER.map((role) => {
+                                const roleMembers = projectMembers.filter((member) => member.role === role)
+                                if (roleMembers.length === 0) return null
+                                return (
+                                  <button
+                                    key={role}
+                                    type="button"
+                                    onClick={() =>
+                                      setDirectorySelection({ role, projectId: project.id })
+                                    }
+                                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                                  >
+                                    {roleDisplayLabel(role)} {roleMembers.length}
+                                  </button>
+                                )
+                              })}
+                              {projectMembers.length === 0 ? (
+                                <span className="rounded-full border border-dashed border-slate-200 px-3 py-1 text-xs font-semibold text-slate-400">
+                                  no assignments
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
                       </CardContent>
                     </Card>
                   )
@@ -2343,48 +2499,15 @@ export default function WorkspacePage() {
         <TabsContent value="vercel">
           <Card>
             <CardHeader>
-              <CardTitle>Hosting & Infrastructure</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                Hosting & Infrastructure
+                <HelpMark text="Hosting liabilities track DNS, mail, communication APIs, compute, and overdue invoices that can affect public production availability." />
+              </CardTitle>
               <CardDescription>
-                Attach Vercel deployments and track registrar, DNS, and static hosting metadata.
+                Track registrar, DNS, mail, communication, and compute dependencies without exposing raw connector settings.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="grid gap-3 rounded-2xl border border-border bg-slate-50/70 p-4 lg:grid-cols-[1fr_auto] lg:items-end">
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-slate-900">
-                    Vercel team ID or slug
-                  </label>
-                  <Input
-                    placeholder="team_..."
-                    value={workspace.vercelTeamId ?? ""}
-                    disabled={!canManageWorkspace}
-                    onChange={(event) =>
-                      setWorkspace((prev) =>
-                        prev ? { ...prev, vercelTeamId: event.target.value } : prev
-                      )
-                    }
-                  />
-                  <p className="text-xs text-slate-500">
-                    Current team: {vercelMeta?.teamId || "personal/default Vercel scope"}
-                  </p>
-                </div>
-                {canManageWorkspace ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => void saveConnectors()}
-                    disabled={savingConnectors}
-                  >
-                    {savingConnectors ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Server className="mr-2 h-4 w-4" />
-                    )}
-                    Save Connector
-                  </Button>
-                ) : null}
-              </div>
-
               {vercelMeta?.warning ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                   {vercelMeta.warning}
@@ -2394,8 +2517,9 @@ export default function WorkspacePage() {
               <div className="rounded-2xl border border-border bg-white/80 p-4">
                 <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">
+                    <p className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                       Infrastructural Liabilities Registry
+                      <HelpMark text="Liability cards show unpaid utility invoices, due-date risk, and whether the trust retainer can clear each dependency." />
                     </p>
                     <p className="text-xs text-slate-500">
                       Third-party service dependencies and retainer-cleared utility invoices.
@@ -2596,51 +2720,112 @@ export default function WorkspacePage() {
                 </div>
               </div>
 
-              <Input
-                placeholder="Search Vercel projects…"
-                value={vercelQuery}
-                onChange={(e) => setVercelQuery(e.target.value)}
-                className="mb-2"
-              />
-
-              {allVercel.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-border bg-white/70 p-6 text-sm text-slate-600">
-                  No Vercel projects are available from the configured token and team.
+              <div className="rounded-2xl border border-border bg-white/80 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">
+                      Ecosystem Asset Connector
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Technical repository and deployment search stays collapsed until needed.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowEcosystemSearch((value) => !value)}
+                  >
+                    <Server className="mr-2 h-4 w-4" />
+                    Search & Connect Ecosystem Assets
+                  </Button>
                 </div>
-              ) : null}
 
-              {workspace.vercelProjects.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                    Attached ({workspace.vercelProjects.length})
-                  </p>
-                  {workspace.vercelProjects.map((p) => (
-                    <VercelCard
-                      key={p.id}
-                      project={p}
-                      attached
-                      onToggle={() => void toggleVercel(p)}
-                      busy={reposBusy.has(p.id)}
+                {showEcosystemSearch ? (
+                  <div className="mt-4 space-y-4 border-t border-border pt-4">
+                    <Input
+                      placeholder="Search connected Vercel deployments…"
+                      value={vercelQuery}
+                      onChange={(e) => setVercelQuery(e.target.value)}
                     />
-                  ))}
-                </div>
-              )}
 
-              <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                  Available ({filteredVercel.filter((p) => !attachedVercelIds.has(p.id)).length})
-                </p>
-                {filteredVercel
-                  .filter((p) => !attachedVercelIds.has(p.id))
-                  .map((p) => (
-                    <VercelCard
-                      key={p.id}
-                      project={p}
-                      attached={false}
-                      onToggle={() => void toggleVercel(p)}
-                      busy={reposBusy.has(p.id)}
-                    />
-                  ))}
+                    {allVercel.length === 0 ? (
+                      <div className="rounded-2xl border border-dashed border-border bg-white/70 p-6 text-sm text-slate-600">
+                        No Vercel projects are available from the configured token and team.
+                      </div>
+                    ) : null}
+
+                    {workspace.repos.length > 0 ? (
+                      <div className="space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                          Connected GitHub Repositories ({workspace.repos.length})
+                        </p>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          {workspace.repos.map((repo) => (
+                            <a
+                              key={repo.id}
+                              href={repo.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="rounded-xl border border-border bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-primary/30 hover:text-primary"
+                            >
+                              {repo.fullName}
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {workspace.vercelProjects.length > 0 && (
+                      <div className="space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                          Attached Vercel Deployments ({workspace.vercelProjects.length})
+                        </p>
+                        {workspace.vercelProjects.map((p) => (
+                          <VercelCard
+                            key={p.id}
+                            project={p}
+                            attached
+                            onToggle={() => void toggleVercel(p)}
+                            busy={reposBusy.has(p.id)}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                        Available Vercel Deployments ({filteredVercel.filter((p) => !attachedVercelIds.has(p.id)).length})
+                      </p>
+                      {filteredVercel
+                        .filter((p) => !attachedVercelIds.has(p.id))
+                        .map((p) => (
+                          <VercelCard
+                            key={p.id}
+                            project={p}
+                            attached={false}
+                            onToggle={() => void toggleVercel(p)}
+                            busy={reposBusy.has(p.id)}
+                          />
+                        ))}
+                    </div>
+
+                    {canManageWorkspace ? (
+                      <div className="flex justify-end">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => void saveConnectors()}
+                          disabled={savingConnectors}
+                        >
+                          {savingConnectors ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : null}
+                          Save Connector
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               <div className="space-y-3 rounded-2xl border border-border bg-white/80 p-4">
@@ -2925,6 +3110,12 @@ export default function WorkspacePage() {
               </DialogHeader>
 
               <div className="space-y-4">
+                {drafting ? (
+                  <div className="flex items-center gap-3 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-800">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    AI Framework Assembly In Progress...
+                  </div>
+                ) : null}
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium text-slate-700">
                     Project description
@@ -3088,7 +3279,7 @@ export default function WorkspacePage() {
                   ) : (
                     <Sparkles className="mr-2 h-4 w-4" />
                   )}
-                  {drafting ? "Drafting..." : "Generate Draft"}
+                  {drafting ? "AI Framework Assembly In Progress..." : "Generate Draft"}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -3228,7 +3419,10 @@ export default function WorkspacePage() {
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between gap-4 pb-3">
                     <div>
-                      <CardTitle>Billing Summary</CardTitle>
+                      <CardTitle className="flex items-center gap-2">
+                        Billing Summary
+                        <HelpMark text="Retainers show escrow balance, Stripe receipts, agency-equivalent production value, and ledger drawdowns tied to workspace work." />
+                      </CardTitle>
                       <CardDescription>
                         Client account:{" "}
                         <span className="font-semibold text-slate-700">
