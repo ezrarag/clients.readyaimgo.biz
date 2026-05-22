@@ -830,6 +830,7 @@ export default function WorkspacePage() {
   const [payingDeliverableId, setPayingDeliverableId] = useState<string | null>(null)
   const [authorizingExpenseId, setAuthorizingExpenseId] = useState<string | null>(null)
   const [analyzingLedger, setAnalyzingLedger] = useState(false)
+  const autoLedgerRefreshRef = useRef<Set<string>>(new Set())
   const [insufficientExpense, setInsufficientExpense] = useState<WorkspaceExpense | null>(null)
   // Active tab — read from URL on mount so Stripe can redirect back to ?tab=payments
   const [activeTab, setActiveTab] = useState("projects")
@@ -1403,11 +1404,16 @@ export default function WorkspacePage() {
     }
   }
 
-  const handleAnalyzeLedger = async () => {
+  const handleAnalyzeLedger = useCallback(async (options?: {
+    source?: "manual-reload" | "page-load"
+    silent?: boolean
+  }) => {
     if (!user || analyzingLedger) return
     setAnalyzingLedger(true)
-    setError(null)
-    setMessage(null)
+    if (!options?.silent) {
+      setError(null)
+      setMessage(null)
+    }
     try {
       const res = await apiFetch<{
         success: boolean
@@ -1416,13 +1422,13 @@ export default function WorkspacePage() {
         message?: string
       }>(user, `/api/workspaces/${params.workspaceId}/ledger/analyze`, {
         method: "POST",
-        body: JSON.stringify({ source: "manual-reload" }),
+        body: JSON.stringify({ source: options?.source ?? "manual-reload" }),
       })
       if (res.receipts.length > 0) {
         setMessage(
           `AI ledger analysis created ${res.receipts.length} receipt${res.receipts.length === 1 ? "" : "s"} from ${res.analyzedSignals ?? "available"} commit signal${res.analyzedSignals === 1 ? "" : "s"}.`
         )
-      } else {
+      } else if (!options?.silent) {
         setMessage(res.message ?? "AI ledger analysis found no new receipt rows.")
       }
       const updatedPaymentData = await apiFetch<WorkspacePaymentData>(
@@ -1431,11 +1437,24 @@ export default function WorkspacePage() {
       )
       setPaymentData(updatedPaymentData)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to analyze commit ledger.")
+      const message = err instanceof Error ? err.message : "Unable to analyze commit ledger."
+      if (options?.silent) {
+        console.warn("Auto AI ledger refresh failed:", message)
+      } else {
+        setError(message)
+      }
     } finally {
       setAnalyzingLedger(false)
     }
-  }
+  }, [analyzingLedger, params.workspaceId, user])
+
+  useEffect(() => {
+    if (!user || loading || !workspace || !paymentData?.clientId) return
+    const workspaceId = params.workspaceId
+    if (autoLedgerRefreshRef.current.has(workspaceId)) return
+    autoLedgerRefreshRef.current.add(workspaceId)
+    void handleAnalyzeLedger({ source: "page-load", silent: true })
+  }, [handleAnalyzeLedger, loading, params.workspaceId, paymentData?.clientId, user, workspace])
 
   const authorizeExpenseDisbursement = async (expenseId: string) => {
     if (!user || !workspace || currentMember?.role !== "owner") return
@@ -3614,7 +3633,7 @@ export default function WorkspacePage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={handleAnalyzeLedger}
+                      onClick={() => void handleAnalyzeLedger()}
                       disabled={analyzingLedger}
                     >
                       {analyzingLedger ? (
