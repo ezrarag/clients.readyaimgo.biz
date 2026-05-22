@@ -46,6 +46,39 @@ function domainFromUrl(value: string | null | undefined) {
   }
 }
 
+function domainFromEmail(value: string | null | undefined) {
+  const text = cleanString(value).toLowerCase()
+  const [, domain] = text.split("@")
+  return domainFromUrl(domain)
+}
+
+function normalizeHumanKey(value: string | null | undefined) {
+  return cleanString(value)
+    .toLowerCase()
+    .replace(/@.*/, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+}
+
+function safeLegacyWorkspaceName(workspace: Workspace) {
+  const legacyName = cleanString(workspace.name)
+  if (!legacyName || legacyName.includes("@")) return ""
+
+  const normalizedLegacy = normalizeHumanKey(legacyName)
+  const emailLocalKeys = [
+    workspace.clientEmail,
+    workspace.registrationEmail,
+    workspace.clientId,
+  ]
+    .map(normalizeHumanKey)
+    .filter(Boolean)
+
+  if (emailLocalKeys.includes(normalizedLegacy)) return ""
+  if (["hostmaster", "webmaster", "admin", "info"].includes(normalizedLegacy)) return ""
+
+  return legacyName.replace(/^\/+/, "")
+}
+
 function isLikelyDefaultVercelUrl(value: string | null | undefined) {
   const domain = domainFromUrl(value)
   return domain.endsWith(".vercel.app")
@@ -91,7 +124,12 @@ function resolveWorkspaceDisplayName(workspace: Workspace) {
     cleanString(workspace.workspaceName) ||
     cleanString(workspace.businessName) ||
     cleanString(workspace.clientBusinessName)
-  return canonicalName || "Untitled Workspace"
+  const legacyName = safeLegacyWorkspaceName(workspace)
+  const emailDomain =
+    domainFromEmail(workspace.registrationEmail) ||
+    domainFromEmail(workspace.clientEmail) ||
+    domainFromEmail(workspace.clientId)
+  return canonicalName || legacyName || emailDomain || "Untitled Workspace"
 }
 
 function displayMemberName(member: {
@@ -110,6 +148,15 @@ async function loadWorkspaces(user: { getIdToken: () => Promise<string> }) {
   if (!res.ok) return []
   const payload = (await res.json()) as { workspaces?: Workspace[] }
   return payload.workspaces ?? []
+}
+
+function uniqueWorkspaces(workspaces: Workspace[]) {
+  const seen = new Set<string>()
+  return workspaces.filter((workspace) => {
+    if (seen.has(workspace.id)) return false
+    seen.add(workspace.id)
+    return true
+  })
 }
 
 async function createWorkspace(user: { getIdToken: () => Promise<string> }, name: string) {
@@ -251,7 +298,7 @@ export default function DashboardPage() {
 
     setLoading(true)
     loadWorkspaces(user)
-      .then(setWorkspaces)
+      .then((items) => setWorkspaces(uniqueWorkspaces(items)))
       .catch(() => setError("Unable to load workspaces."))
       .finally(() => setLoading(false))
   }, [authLoading, user, router])
@@ -262,7 +309,7 @@ export default function DashboardPage() {
     setError(null)
     try {
       const ws = await createWorkspace(user, newName.trim())
-      setWorkspaces((prev) => [ws, ...prev])
+      setWorkspaces((prev) => uniqueWorkspaces([ws, ...prev]))
       setNewName("")
       setShowCreate(false)
       router.push(`/workspace/${ws.id}`)

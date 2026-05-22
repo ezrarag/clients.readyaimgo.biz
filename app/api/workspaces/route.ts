@@ -9,6 +9,7 @@ import {
   normalizeWorkspace,
   normalizeWorkspaceMember,
   parseWorkspaceRole,
+  slugifyWorkspaceName,
 } from "@/lib/workspaces"
 
 export const dynamic = "force-dynamic"
@@ -20,6 +21,55 @@ async function isAdmin(uid: string) {
   const snap = await getAdminDb().collection("users").doc(uid).get()
   const roles = snap.exists ? (snap.data() as Record<string, unknown>).roles : null
   return Array.isArray(roles) && roles.includes("beam-admin")
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null
+}
+
+function workspaceNameSlug(data: Record<string, unknown>) {
+  const name =
+    readString(data.workspaceName) ||
+    readString(data.businessName) ||
+    readString(data.clientBusinessName) ||
+    readString(data.name) ||
+    ""
+  return slugifyWorkspaceName(name)
+}
+
+async function findExistingWorkspaceForName({
+  db,
+  uid,
+  clientId,
+  name,
+}: {
+  db: FirebaseFirestore.Firestore
+  uid: string
+  clientId: string | null
+  name: string
+}) {
+  const targetSlug = slugifyWorkspaceName(name)
+  if (!targetSlug) return null
+
+  const [ownerSnap, clientSnap] = await Promise.all([
+    db.collection("workspaces").where("ownerUid", "==", uid).limit(50).get().catch(() => null),
+    clientId
+      ? db.collection("workspaces").where("clientId", "==", clientId).limit(50).get().catch(() => null)
+      : Promise.resolve(null),
+  ])
+
+  const candidates = new Map<string, FirebaseFirestore.QueryDocumentSnapshot>()
+  for (const doc of ownerSnap?.docs ?? []) candidates.set(doc.id, doc)
+  for (const doc of clientSnap?.docs ?? []) candidates.set(doc.id, doc)
+
+  for (const doc of candidates.values()) {
+    const data = doc.data() as Record<string, unknown>
+    if (workspaceNameSlug(data) === targetSlug) {
+      return { id: doc.id, data }
+    }
+  }
+
+  return null
 }
 
 // ─── GET /api/workspaces — list workspaces for the calling user ───────────────
@@ -254,8 +304,81 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const workspaceId = generateWorkspaceId(name)
     const now = FieldValue.serverTimestamp()
+    const existingWorkspace = await findExistingWorkspaceForName({
+      db,
+      uid,
+      clientId,
+      name,
+    })
+
+    if (existingWorkspace) {
+      const workspaceRef = db.collection("workspaces").doc(existingWorkspace.id)
+      const batch = db.batch()
+
+      batch.set(
+        workspaceRef,
+        {
+          ownerUid: readString(existingWorkspace.data.ownerUid) || uid,
+          updatedAt: now,
+        },
+        { merge: true }
+      )
+      batch.set(workspaceRef.collection("members").doc(uid), {
+        uid,
+        email,
+        displayName: decodedToken.name ?? null,
+        role: "owner",
+        addedAt: now,
+        assignedRepos: [],
+        assignedVercelIds: [],
+      })
+      batch.set(
+        db.collection("users").doc(uid),
+        {
+          workspaceIds: FieldValue.arrayUnion(existingWorkspace.id),
+          lastSeenAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      )
+
+      if (clientId) {
+        batch.set(
+          db.collection("clients").doc(clientId),
+          {
+            uid,
+            businessEmail: clientEmail,
+            email: clientEmail,
+            workspaceId: existingWorkspace.id,
+            workspaceIds: FieldValue.arrayUnion(existingWorkspace.id),
+            adminApprovalPending:
+              typeof existingClientData?.adminApprovalPending === "boolean"
+                ? existingClientData.adminApprovalPending
+                : true,
+            updatedAt: now,
+          },
+          { merge: true }
+        )
+      }
+
+      await batch.commit()
+
+      return NextResponse.json(
+        {
+          success: true,
+          workspace: normalizeWorkspace(existingWorkspace.id, {
+            ...existingWorkspace.data,
+            ownerUid: readString(existingWorkspace.data.ownerUid) || uid,
+            updatedAt: new Date().toISOString(),
+          }),
+          reused: true,
+        },
+        { status: 200 }
+      )
+    }
+
+    const workspaceId = generateWorkspaceId(name)
     const batch = db.batch()
 
     const workspaceRef = db.collection("workspaces").doc(workspaceId)
