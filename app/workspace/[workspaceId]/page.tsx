@@ -830,6 +830,7 @@ export default function WorkspacePage() {
   const [payingDeliverableId, setPayingDeliverableId] = useState<string | null>(null)
   const [authorizingExpenseId, setAuthorizingExpenseId] = useState<string | null>(null)
   const [analyzingLedger, setAnalyzingLedger] = useState(false)
+  const [analyzingZohoEmails, setAnalyzingZohoEmails] = useState(false)
   const autoLedgerRefreshRef = useRef<Set<string>>(new Set())
   const [insufficientExpense, setInsufficientExpense] = useState<WorkspaceExpense | null>(null)
   // Active tab — read from URL on mount so Stripe can redirect back to ?tab=payments
@@ -1455,6 +1456,40 @@ export default function WorkspacePage() {
     autoLedgerRefreshRef.current.add(workspaceId)
     void handleAnalyzeLedger({ source: "page-load", silent: true })
   }, [handleAnalyzeLedger, loading, params.workspaceId, paymentData?.clientId, user, workspace])
+
+  const handleAnalyzeZohoEmails = async () => {
+    if (!user || analyzingZohoEmails) return
+    setAnalyzingZohoEmails(true)
+    setError(null)
+    setMessage(null)
+    try {
+      const res = await apiFetch<{
+        success: boolean
+        records: Array<{ id: string }>
+        analyzedEmails?: number
+        message?: string
+      }>(user, `/api/workspaces/${params.workspaceId}/infrastructure/analyze-zoho-emails`, {
+        method: "POST",
+        body: JSON.stringify({ source: "hosting-tab" }),
+      })
+      if (res.records.length > 0) {
+        setMessage(
+          `Zoho email analysis created ${res.records.length} source-backed infrastructure record${res.records.length === 1 ? "" : "s"} from ${res.analyzedEmails ?? "available"} email${res.analyzedEmails === 1 ? "" : "s"}.`
+        )
+      } else {
+        setMessage(res.message ?? "Zoho email analysis found no source-backed records.")
+      }
+      const updatedExpenses = await apiFetch<{ expenses: WorkspaceExpense[] }>(
+        user,
+        `/api/workspaces/${params.workspaceId}/expenses`
+      )
+      setExpenses(updatedExpenses.expenses)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to analyze Zoho emails.")
+    } finally {
+      setAnalyzingZohoEmails(false)
+    }
+  }
 
   const authorizeExpenseDisbursement = async (expenseId: string) => {
     if (!user || !workspace || currentMember?.role !== "owner") return
@@ -2518,13 +2553,31 @@ export default function WorkspacePage() {
         <TabsContent value="vercel">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                Hosting & Infrastructure
-                <HelpMark text="Hosting liabilities track DNS, mail, communication APIs, compute, and overdue invoices that can affect public production availability." />
-              </CardTitle>
-              <CardDescription>
-                Track registrar, DNS, mail, communication, and compute dependencies without exposing raw connector settings.
-              </CardDescription>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    Hosting & Infrastructure
+                    <HelpMark text="Hosting liabilities track DNS, mail, communication APIs, compute, and overdue invoices that can affect public production availability." />
+                  </CardTitle>
+                  <CardDescription>
+                    Track registrar, DNS, mail, communication, and compute dependencies without exposing raw connector settings.
+                  </CardDescription>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleAnalyzeZohoEmails()}
+                  disabled={analyzingZohoEmails}
+                >
+                  {analyzingZohoEmails ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="mr-2 h-4 w-4" />
+                  )}
+                  {analyzingZohoEmails ? "Analyzing Zoho" : "Analyze Zoho Emails"}
+                </Button>
+              </div>
             </CardHeader>
             <CardContent className="space-y-3">
               {vercelMeta?.warning ? (
