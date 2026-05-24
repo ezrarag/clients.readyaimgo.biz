@@ -104,6 +104,10 @@ function readStringArray(value: unknown) {
     : []
 }
 
+function readNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
 function summarizeHostingConfig(workspace: Record<string, unknown>) {
   const hosting =
     workspace.hosting && typeof workspace.hosting === "object"
@@ -185,9 +189,35 @@ async function fetchGitHubRepoEvidence(fullName: string) {
     .filter((item): item is string => Boolean(item))
     .join(" | ")
 
+  const latestSha = readString(commits[0]?.sha)
+  const latestStats = latestSha
+    ? await fetch(`https://api.github.com/repos/${repoPath}/commits/${latestSha}`, {
+        headers,
+        cache: "no-store",
+      })
+        .then(async (response) => {
+          if (!response.ok) return null
+          const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null
+          const stats =
+            payload?.stats && typeof payload.stats === "object"
+              ? (payload.stats as Record<string, unknown>)
+              : null
+          const total = readNumber(stats?.total)
+          const additions = readNumber(stats?.additions)
+          const deletions = readNumber(stats?.deletions)
+          return total !== null || additions !== null || deletions !== null
+            ? `Latest commit line-change metric for ${fullName}: ${latestSha.slice(0, 8)} total ${
+                total ?? "unknown"
+              }, additions ${additions ?? "unknown"}, deletions ${deletions ?? "unknown"}`
+            : null
+        })
+        .catch(() => null)
+    : null
+
   return [
     languageSummary && `GitHub language metric for ${fullName}: ${languageSummary}`,
     commitSummary && `Latest default-branch commits for ${fullName}: ${commitSummary}`,
+    latestStats,
   ].filter((item): item is string => Boolean(item))
 }
 
@@ -249,6 +279,20 @@ async function collectWorkspaceTechnicalContext(
   }
 
   for (const [projectId, project] of projects) {
+    const lineChangeCount =
+      readNumber(project.lineChangeCount) ??
+      readNumber(project.linesChanged) ??
+      readNumber(project.commitLineChanges) ??
+      readNumber(project.totalLineChanges)
+    const additions = readNumber(project.additions) ?? readNumber(project.linesAdded)
+    const deletions = readNumber(project.deletions) ?? readNumber(project.linesDeleted)
+    const codeMetric =
+      lineChangeCount !== null || additions !== null || deletions !== null
+        ? `line-change count: ${lineChangeCount ?? "not recorded"}; additions: ${
+            additions ?? "not recorded"
+          }; deletions: ${deletions ?? "not recorded"}`
+        : "line-change count: not recorded"
+
     context.push(
       `Workspace project record: ${readString(project.title) ?? readString(project.name) ?? projectId}; type: ${
         readString(project.projectType) ?? "not recorded"
@@ -260,7 +304,7 @@ async function collectWorkspaceTechnicalContext(
         readString(project.liveUrl) || readString(project.deployUrl) || "not recorded"
       }; latest commit: ${
         readString(project.latestCommitMessage) || readString(project.latestCommitSha) || "not recorded"
-      }; verified metadata lines: ${estimateDataStructureLines(project)}`
+      }; ${codeMetric}; verified metadata lines: ${estimateDataStructureLines(project)}`
     )
   }
 
@@ -295,7 +339,7 @@ function buildPrompt(params: {
         .map((name) => `- ${name}`)
         .join("\n")}`,
     params.technicalContext.length > 0 &&
-      `**Repository and deployment evidence:**\n${params.technicalContext
+      `**Exact repository, deployment, and project evidence snapshot:**\n${params.technicalContext
         .map((item, index) => `${index + 1}. ${item}`)
         .join("\n")}`,
     params.adminRules.length > 0 &&
@@ -331,8 +375,8 @@ IMPORTANT RULES:
 3. Always include in legalReviewNotes: "This AI-generated draft is not legal advice and requires review by qualified legal counsel before execution."
 4. Keep language professional and specific to the provided context.
 5. Treat admin-provided drafting rules as binding context. If a client revision conflicts with those rules, preserve the rule and flag the conflict in legalReviewNotes.
-6. Cross-examine the customer text against the repository and deployment evidence before writing scope, deliverables, assumptions, and payment terms.
-7. Reference real repository handles, deployment IDs, project records, modules, or platform configuration only when they appear in the evidence.
+6. Cross-examine the customer text against the exact repository, deployment, project, and line-change evidence snapshot before writing scope, deliverables, assumptions, and payment terms.
+7. Reference real repository handles, deployment IDs, line-change counts, project records, modules, or platform configuration only when they appear in the evidence.
 8. Purge generic template placeholders and unrelated examples, including pizza, restaurant, or canned sample project language unless the customer explicitly supplied that context.
 9. Do not invent codebases, deployment logs, municipal endpoints, financial terms, or client obligations that are not supported by the supplied context.
 
