@@ -5,6 +5,8 @@ import { useParams, useRouter } from "next/navigation"
 import {
   CheckCircle,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   CreditCard,
   Download,
   Globe2,
@@ -831,6 +833,8 @@ export default function WorkspacePage() {
   const [authorizingExpenseId, setAuthorizingExpenseId] = useState<string | null>(null)
   const [analyzingLedger, setAnalyzingLedger] = useState(false)
   const [analyzingZohoEmails, setAnalyzingZohoEmails] = useState(false)
+  const [domainQuery, setDomainQuery] = useState("")
+  const [retainerSlide, setRetainerSlide] = useState(0)
   const autoLedgerRefreshRef = useRef<Set<string>>(new Set())
   const [insufficientExpense, setInsufficientExpense] = useState<WorkspaceExpense | null>(null)
   // Active tab — read from URL on mount so Stripe can redirect back to ?tab=payments
@@ -2549,7 +2553,7 @@ export default function WorkspacePage() {
           </Card>
         </TabsContent>
 
-        {/* ── Vercel Projects ── */}
+        {/* ── Hosting & Infrastructure ── */}
         <TabsContent value="vercel">
           <Card>
             <CardHeader>
@@ -2557,10 +2561,10 @@ export default function WorkspacePage() {
                 <div>
                   <CardTitle className="flex items-center gap-2">
                     Hosting & Infrastructure
-                    <HelpMark text="Hosting liabilities track DNS, mail, communication APIs, compute, and overdue invoices that can affect public production availability." />
+                    <HelpMark text="Service health shows DNS, mail, communication APIs, and compute dependencies. Expense cards highlight unpaid invoices that can affect production availability." />
                   </CardTitle>
                   <CardDescription>
-                    Track registrar, DNS, mail, communication, and compute dependencies without exposing raw connector settings.
+                    Service health, domain status, and connected deployment assets.
                   </CardDescription>
                 </div>
                 <Button
@@ -2579,280 +2583,267 @@ export default function WorkspacePage() {
                 </Button>
               </div>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-6">
               {vercelMeta?.warning ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                   {vercelMeta.warning}
                 </div>
               ) : null}
 
-              <div className="rounded-2xl border border-border bg-white/80 p-4">
-                <div className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                      Infrastructural Liabilities Registry
-                      <HelpMark text="Liability cards show unpaid utility invoices, due-date risk, and whether the trust retainer can clear each dependency." />
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      Third-party service dependencies and retainer-cleared utility invoices.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant="secondary">
-                      {expenses.filter((expense) => expense.status === "unpaid").length} unpaid
-                    </Badge>
-                    <Badge
-                      variant={
-                        expenses.some((expense) => expense.criticalSystemFlag)
-                          ? "danger"
-                          : "success"
-                      }
+              {/* ── Section 1: Hosting Status ── */}
+              <div className="space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Hosting Status
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {trackedUtilities.map((utility) => (
+                    <div
+                      key={utility.provider}
+                      className="rounded-2xl border border-border bg-white/80 px-4 py-3"
                     >
-                      {expenses.some((expense) => expense.criticalSystemFlag)
-                        ? "critical risk"
-                        : "no critical flags"}
-                    </Badge>
-                  </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">{utility.label}</p>
+                        <Badge variant={utility.health.variant}>{utility.health.label}</Badge>
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">{utility.health.detail}</p>
+                    </div>
+                  ))}
                 </div>
 
-                <div className="grid gap-4 pt-4 lg:grid-cols-[0.85fr_1.15fr]">
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Active Tracked Utilities
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Connection health for production utility gates.
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      {trackedUtilities.map((utility) => (
-                        <div
-                          key={utility.provider}
-                          className="rounded-xl border border-border bg-slate-50 px-3 py-3"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                              <p className="text-sm font-semibold text-slate-900">
-                                {utility.label}
+                {expenses.length > 0 ? (
+                  <div className="space-y-2">
+                    {expenses.map((expense) => (
+                      <div
+                        key={expense.id}
+                        className={[
+                          "rounded-xl border bg-slate-50 p-3",
+                          expense.criticalSystemFlag
+                            ? "border-rose-300 bg-rose-50/70"
+                            : expense.status === "paid"
+                              ? "border-emerald-100 bg-emerald-50/50"
+                              : "border-border",
+                        ].join(" ")}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="truncate text-sm font-semibold text-slate-900">
+                                {expense.source}
                               </p>
-                              <p className="mt-0.5 text-xs text-slate-500">{utility.cycle}</p>
+                              <Badge variant={expense.status === "paid" ? "success" : "warning"}>
+                                {expense.status}
+                              </Badge>
+                              {expense.criticalSystemFlag ? (
+                                <Badge variant="danger">Critical</Badge>
+                              ) : null}
                             </div>
-                            <Badge variant={utility.health.variant}>{utility.health.label}</Badge>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              {expense.description}
+                              {expense.dueDate
+                                ? ` · Due ${new Date(expense.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+                                : ""}
+                            </p>
                           </div>
-                          <p className="mt-2 text-xs leading-5 text-slate-500">
-                            {utility.health.detail}
-                          </p>
+                          <div className="flex shrink-0 flex-col items-end gap-2">
+                            <p className="text-base font-bold text-slate-900">
+                              {currencyFormatter.format(expense.amount)}
+                            </p>
+                            {expense.status === "unpaid" ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => void authorizeExpenseDisbursement(expense.id)}
+                                disabled={
+                                  currentMember?.role !== "owner" ||
+                                  authorizingExpenseId === expense.id
+                                }
+                              >
+                                {authorizingExpenseId === expense.id ? (
+                                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                                ) : null}
+                                Clear via Retainer
+                              </Button>
+                            ) : (
+                              <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                                Cleared
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      ))}
-                    </div>
+                      </div>
+                    ))}
                   </div>
+                ) : (
+                  <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                    No infrastructure expenses recorded yet.
+                  </p>
+                )}
+              </div>
 
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Pending Resource Invoices
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Clear unpaid utility liabilities directly through the trust retainer.
-                      </p>
-                    </div>
-                    {expenses.length === 0 ? (
-                      <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-500">
-                        No infrastructure expenses recorded yet.
-                      </p>
-                    ) : (
-                      <div className="space-y-3">
-                        {expenses.map((expense) => (
+              {/* ── Section 2: Domain ── */}
+              <div className="space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Domain
+                </p>
+                {(() => {
+                  const domainExpenses = expenses.filter(
+                    (e) =>
+                      e.serviceProvider === "Namecheap" &&
+                      e.billingCycleType === "Domain Renewal"
+                  )
+                  if (domainExpenses.length > 0) {
+                    return (
+                      <div className="space-y-2">
+                        {domainExpenses.map((de) => (
                           <div
-                            key={expense.id}
-                            className={[
-                              "rounded-xl border bg-slate-50 p-3",
-                              expense.criticalSystemFlag
-                                ? "border-rose-300 bg-rose-50/70"
-                                : expense.status === "paid"
-                                  ? "border-emerald-100 bg-emerald-50/50"
-                                  : "border-border",
-                            ].join(" ")}
+                            key={de.id}
+                            className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-white/80 px-4 py-3"
                           >
-                            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="truncate text-sm font-semibold text-slate-900">
-                                    {expense.source}
-                                  </p>
-                                  <Badge variant={expense.status === "paid" ? "success" : "warning"}>
-                                    {expense.status}
-                                  </Badge>
-                                  <Badge variant="secondary">{expense.serviceProvider}</Badge>
-                                  <Badge variant="secondary">{expense.billingCycleType}</Badge>
-                                  {expense.criticalSystemFlag ? (
-                                    <Badge variant="danger">
-                                      CRITICAL COMPONENT DISCONNECTED — Action Required
-                                    </Badge>
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900">{de.source}</p>
+                              <p className="mt-0.5 text-xs text-slate-500">
+                                {de.status === "unpaid" && de.dueDate
+                                  ? `Renewal due ${new Date(de.dueDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`
+                                  : "Domain active"}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <p className="text-sm font-semibold text-slate-900">
+                                {currencyFormatter.format(de.amount)}
+                              </p>
+                              {de.status === "unpaid" ? (
+                                <Button
+                                  size="sm"
+                                  onClick={() => void authorizeExpenseDisbursement(de.id)}
+                                  disabled={
+                                    currentMember?.role !== "owner" ||
+                                    authorizingExpenseId === de.id
+                                  }
+                                >
+                                  {authorizingExpenseId === de.id ? (
+                                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                                   ) : null}
-                                </div>
-                                <p className="mt-1 text-xs leading-5 text-slate-500">
-                                  {expense.description}
-                                  {expense.vendor ? ` · ${expense.vendor}` : ""}
-                                </p>
-                                <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-medium text-slate-500">
-                                  <span>
-                                    Due:{" "}
-                                    {expense.dueDate
-                                      ? new Date(expense.dueDate).toLocaleDateString("en-US", {
-                                          month: "short",
-                                          day: "numeric",
-                                          year: "numeric",
-                                        })
-                                      : "Not recorded"}
-                                  </span>
-                                  <span>
-                                    {expense.daysOverdue >= 0
-                                      ? `${expense.daysOverdue} day${expense.daysOverdue === 1 ? "" : "s"} overdue`
-                                      : "Not overdue"}
-                                  </span>
-                                </div>
-                              </div>
-                              <div className="flex shrink-0 flex-col gap-2 xl:items-end">
-                                <p className="text-lg font-bold text-slate-900">
-                                  {currencyFormatter.format(expense.amount)}
-                                </p>
-                                {expense.status === "unpaid" ? (
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    onClick={() => void authorizeExpenseDisbursement(expense.id)}
-                                    disabled={
-                                      currentMember?.role !== "owner" ||
-                                      authorizingExpenseId === expense.id
-                                    }
-                                    className="w-full xl:w-auto"
-                                  >
-                                    {authorizingExpenseId === expense.id ? (
-                                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                                    ) : null}
-                                    Clear Invoice via Trust Retainer
-                                  </Button>
-                                ) : (
-                                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                                    Cleared
-                                  </span>
-                                )}
-                              </div>
+                                  Pay to Keep Active
+                                </Button>
+                              ) : (
+                                <Badge variant="success">Active</Badge>
+                              )}
                             </div>
                           </div>
                         ))}
                       </div>
-                    )}
-                  </div>
-                </div>
+                    )
+                  }
+                  return (
+                    <div className="space-y-2">
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Input
+                          placeholder="e.g. yourbusiness.com — search for a domain to request"
+                          value={domainQuery}
+                          onChange={(e) => setDomainQuery(e.target.value)}
+                          className="flex-1"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={!domainQuery.trim()}
+                          onClick={() => {
+                            setMessage(
+                              `Domain request for "${domainQuery}" submitted. ReadyAimGo will secure this after payment is confirmed.`
+                            )
+                            setDomainQuery("")
+                          }}
+                        >
+                          <Globe2 className="mr-2 h-4 w-4" />
+                          Request Domain
+                        </Button>
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        No domain is currently attached. ReadyAimGo will secure or renew your domain after payment is confirmed.
+                      </p>
+                    </div>
+                  )
+                })()}
               </div>
 
-              <div className="grid gap-3 rounded-2xl border border-border bg-slate-50/70 p-4 lg:grid-cols-4">
-                <div className="lg:col-span-1">
-                  <p className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                    <Globe2 className="h-4 w-4" />
-                    Infrastructure flags
+              {/* ── Section 3: Attached Assets ── */}
+              <div className="space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Attached Assets
+                </p>
+
+                {workspace.repos.length === 0 && workspace.vercelProjects.length === 0 ? (
+                  <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                    No deployment assets are linked to this workspace yet.
                   </p>
-                  <p className="mt-1 text-xs text-slate-500">Provider-agnostic controls for non-Vercel assets.</p>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2 lg:col-span-3">
-                  {[
-                    ["hasExternalDns", "External DNS"],
-                    ["hasManualRecords", "Manual DNS"],
-                    ["hasStaticFallback", "Static fallback"],
-                    ["needsDnsReview", "Needs DNS review"],
-                  ].map(([key, label]) => (
-                    <label key={key} className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(workspace.hosting.infrastructureFlags[key as keyof Workspace["hosting"]["infrastructureFlags"]])}
-                        disabled={!canManageWorkspace}
-                        onChange={(event) =>
-                          setWorkspace((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  hosting: {
-                                    ...prev.hosting,
-                                    infrastructureFlags: {
-                                      ...prev.hosting.infrastructureFlags,
-                                      [key]: event.target.checked,
-                                    },
-                                  },
-                                }
-                              : prev
-                          )
-                        }
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              </div>
+                ) : null}
 
-              <div className="rounded-2xl border border-border bg-white/80 p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">
-                      Ecosystem Asset Connector
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      Technical repository and deployment search stays collapsed until needed.
-                    </p>
+                {workspace.repos.length > 0 ? (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {workspace.repos.map((repo) => (
+                      <a
+                        key={repo.id}
+                        href={repo.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-2 rounded-xl border border-border bg-white/80 px-3 py-2.5 text-sm font-medium text-slate-700 hover:border-primary/30 hover:text-primary"
+                      >
+                        <Github className="h-4 w-4 shrink-0 text-slate-400" />
+                        <span className="truncate">{repo.fullName}</span>
+                        <ExternalLink className="ml-auto h-3.5 w-3.5 shrink-0 text-slate-400" />
+                      </a>
+                    ))}
                   </div>
+                ) : null}
+
+                {workspace.vercelProjects.length > 0 ? (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {workspace.vercelProjects.map((p) => (
+                      <a
+                        key={p.id}
+                        href={p.url ?? "#"}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-2 rounded-xl border border-border bg-white/80 px-3 py-2.5 text-sm font-medium text-slate-700 hover:border-primary/30 hover:text-primary"
+                      >
+                        <Server className="h-4 w-4 shrink-0 text-slate-400" />
+                        <span className="truncate">{p.name}</span>
+                        {p.url ? (
+                          <ExternalLink className="ml-auto h-3.5 w-3.5 shrink-0 text-slate-400" />
+                        ) : null}
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="pt-1">
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => setShowEcosystemSearch((value) => !value)}
+                    size="sm"
+                    onClick={() => setShowEcosystemSearch((v) => !v)}
                   >
                     <Server className="mr-2 h-4 w-4" />
-                    Search & Connect Ecosystem Assets
+                    {showEcosystemSearch ? "Hide" : "Search &"} Connect Assets
                   </Button>
                 </div>
 
                 {showEcosystemSearch ? (
-                  <div className="mt-4 space-y-4 border-t border-border pt-4">
+                  <div className="space-y-4 rounded-2xl border border-border bg-white/80 p-4">
                     <Input
                       placeholder="Search connected Vercel deployments…"
                       value={vercelQuery}
                       onChange={(e) => setVercelQuery(e.target.value)}
                     />
-
                     {allVercel.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-border bg-white/70 p-6 text-sm text-slate-600">
-                        No Vercel projects are available from the configured token and team.
-                      </div>
+                      <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                        No Vercel projects available from the configured token and team.
+                      </p>
                     ) : null}
-
-                    {workspace.repos.length > 0 ? (
-                      <div className="space-y-2">
-                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                          Connected GitHub Repositories ({workspace.repos.length})
-                        </p>
-                        <div className="grid gap-2 md:grid-cols-2">
-                          {workspace.repos.map((repo) => (
-                            <a
-                              key={repo.id}
-                              href={repo.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="rounded-xl border border-border bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:border-primary/30 hover:text-primary"
-                            >
-                              {repo.fullName}
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {workspace.vercelProjects.length > 0 && (
-                      <div className="space-y-2">
-                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                          Attached Vercel Deployments ({workspace.vercelProjects.length})
-                        </p>
-                        {workspace.vercelProjects.map((p) => (
+                    <div className="space-y-2">
+                      {filteredVercel
+                        .filter((p) => attachedVercelIds.has(p.id))
+                        .map((p) => (
                           <VercelCard
                             key={p.id}
                             project={p}
@@ -2861,13 +2852,6 @@ export default function WorkspacePage() {
                             busy={reposBusy.has(p.id)}
                           />
                         ))}
-                      </div>
-                    )}
-
-                    <div className="space-y-2">
-                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                        Available Vercel Deployments ({filteredVercel.filter((p) => !attachedVercelIds.has(p.id)).length})
-                      </p>
                       {filteredVercel
                         .filter((p) => !attachedVercelIds.has(p.id))
                         .map((p) => (
@@ -2880,12 +2864,12 @@ export default function WorkspacePage() {
                           />
                         ))}
                     </div>
-
                     {canManageWorkspace ? (
-                      <div className="flex justify-end">
+                      <div className="flex justify-end border-t border-border pt-3">
                         <Button
                           type="button"
                           variant="outline"
+                          size="sm"
                           onClick={() => void saveConnectors()}
                           disabled={savingConnectors}
                         >
@@ -2896,181 +2880,6 @@ export default function WorkspacePage() {
                         </Button>
                       </div>
                     ) : null}
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="space-y-3 rounded-2xl border border-border bg-white/80 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">Manual DNS targets</p>
-                    <p className="text-xs text-slate-500">Namecheap records, CNAME targets, TXT verification, and registrar handoffs.</p>
-                  </div>
-                  {canManageWorkspace ? (
-                    <Button type="button" variant="outline" size="sm" onClick={addManualDnsTarget}>
-                      <Plus className="mr-2 h-3.5 w-3.5" />
-                      DNS
-                    </Button>
-                  ) : null}
-                </div>
-                {workspace.hosting.manualDnsTargets.length === 0 ? (
-                  <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-500">No manual DNS records tracked.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {workspace.hosting.manualDnsTargets.map((target) => (
-                      <div key={target.id} className="grid gap-2 rounded-xl bg-slate-50 p-3 md:grid-cols-[1fr_120px_1.3fr_130px]">
-                        <Input
-                          placeholder="Host, e.g. @ or www"
-                          value={target.host}
-                          disabled={!canManageWorkspace}
-                          onChange={(event) => updateManualDnsTarget({ ...target, host: event.target.value })}
-                        />
-                        <select
-                          className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                          value={target.recordType}
-                          disabled={!canManageWorkspace}
-                          onChange={(event) =>
-                            updateManualDnsTarget({
-                              ...target,
-                              recordType: event.target.value as ManualDnsTarget["recordType"],
-                            })
-                          }
-                        >
-                          {["A", "AAAA", "CNAME", "TXT", "MX", "NS", "SRV", "CAA"].map((type) => (
-                            <option key={type} value={type}>{type}</option>
-                          ))}
-                        </select>
-                        <Input
-                          placeholder="Record value"
-                          value={target.value}
-                          disabled={!canManageWorkspace}
-                          onChange={(event) => updateManualDnsTarget({ ...target, value: event.target.value })}
-                        />
-                        <select
-                          className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                          value={target.status}
-                          disabled={!canManageWorkspace}
-                          onChange={(event) =>
-                            updateManualDnsTarget({
-                              ...target,
-                              status: event.target.value as ManualDnsTarget["status"],
-                            })
-                          }
-                        >
-                          <option value="planned">planned</option>
-                          <option value="active">active</option>
-                          <option value="needs-review">needs review</option>
-                        </select>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-3 rounded-2xl border border-border bg-white/80 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">Static hosting platforms</p>
-                    <p className="text-xs text-slate-500">Netlify, Cloudflare Pages, GitHub Pages, Firebase Hosting, or other static deployment targets.</p>
-                  </div>
-                  {canManageWorkspace ? (
-                    <Button type="button" variant="outline" size="sm" onClick={addStaticHost}>
-                      <Plus className="mr-2 h-3.5 w-3.5" />
-                      Static Host
-                    </Button>
-                  ) : null}
-                </div>
-                {workspace.hosting.staticHosts.length === 0 ? (
-                  <p className="rounded-xl bg-slate-50 px-3 py-3 text-xs text-slate-500">No static hosts tracked.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {workspace.hosting.staticHosts.map((host) => (
-                      <div key={host.id} className="grid gap-2 rounded-xl bg-slate-50 p-3 md:grid-cols-[160px_1fr_1fr]">
-                        <select
-                          className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                          value={host.provider}
-                          disabled={!canManageWorkspace}
-                          onChange={(event) =>
-                            setWorkspace((prev) =>
-                              prev
-                                ? {
-                                    ...prev,
-                                    hosting: {
-                                      ...prev.hosting,
-                                      staticHosts: prev.hosting.staticHosts.map((item) =>
-                                        item.id === host.id
-                                          ? {
-                                              ...item,
-                                              provider: event.target.value as StaticHostingPlatform["provider"],
-                                            }
-                                          : item
-                                      ),
-                                    },
-                                  }
-                                : prev
-                            )
-                          }
-                        >
-                          <option value="netlify">Netlify</option>
-                          <option value="cloudflare-pages">Cloudflare Pages</option>
-                          <option value="github-pages">GitHub Pages</option>
-                          <option value="firebase-hosting">Firebase Hosting</option>
-                          <option value="other">Other</option>
-                        </select>
-                        <Input
-                          placeholder="Project name"
-                          value={host.projectName}
-                          disabled={!canManageWorkspace}
-                          onChange={(event) =>
-                            setWorkspace((prev) =>
-                              prev
-                                ? {
-                                    ...prev,
-                                    hosting: {
-                                      ...prev.hosting,
-                                      staticHosts: prev.hosting.staticHosts.map((item) =>
-                                        item.id === host.id ? { ...item, projectName: event.target.value } : item
-                                      ),
-                                    },
-                                  }
-                                : prev
-                            )
-                          }
-                        />
-                        <Input
-                          placeholder="Production URL"
-                          value={host.productionUrl ?? ""}
-                          disabled={!canManageWorkspace}
-                          onChange={(event) =>
-                            setWorkspace((prev) =>
-                              prev
-                                ? {
-                                    ...prev,
-                                    hosting: {
-                                      ...prev.hosting,
-                                      staticHosts: prev.hosting.staticHosts.map((item) =>
-                                        item.id === host.id ? { ...item, productionUrl: event.target.value } : item
-                                      ),
-                                    },
-                                  }
-                                : prev
-                            )
-                          }
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {canManageWorkspace ? (
-                  <div className="flex justify-end">
-                    <Button
-                      type="button"
-                      onClick={() => void saveHosting(workspace.hosting)}
-                      disabled={savingHosting}
-                    >
-                      {savingHosting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      Save Hosting Metadata
-                    </Button>
                   </div>
                 ) : null}
               </div>
@@ -3531,43 +3340,180 @@ export default function WorkspacePage() {
                         {currencyFormatter.format(paymentData.retainerBalance)}
                       </p>
                     </div>
-                    {/* Enterprise value reference matrix */}
+                    {/* Carousel: Valuation / Contract Alignment / Hosting Implications */}
                     <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-5">
-                      <p className="flex items-center text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
-                        Enterprise Valuation Benchmarks
-                        <InfoTooltip text="Internal agency-floor valuation references used to contextualize the software production represented in the trust ledger." />
-                      </p>
-                      <div className="mt-4 space-y-3">
-                        {agencyValuationBenchmarks.length === 0 ? (
-                          <div className="rounded-xl bg-white/70 px-3 py-3">
-                            <p className="text-xs font-medium leading-5 text-slate-500">
-                              No production equity receipts have been calculated yet. Refresh
-                              the AI ledger after connecting GitHub or Vercel activity.
-                            </p>
-                          </div>
-                        ) : (
-                          agencyValuationBenchmarks.map((item) => (
-                            <div key={item.label} className="rounded-xl bg-white/70 px-3 py-2">
-                              <p className="flex items-start text-xs font-semibold leading-5 text-slate-800">
-                                <span>{item.label}</span>
-                                <InfoTooltip text={buildLedgerJustificationTooltip(item.entries)} />
-                              </p>
-                              <p className="mt-0.5 text-xs text-slate-500">
-                                {currencyFormatter.format(item.value)} aggregated verified
-                                production equity
+                      {/* Carousel header */}
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
+                          {retainerSlide === 0
+                            ? "Valuation"
+                            : retainerSlide === 1
+                              ? "Contract Alignment"
+                              : "Hosting Implications"}
+                        </p>
+                        <div className="flex items-center gap-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setRetainerSlide((s) => Math.max(0, s - 1))}
+                            disabled={retainerSlide === 0}
+                            className="flex h-6 w-6 items-center justify-center rounded-full text-amber-600 transition hover:bg-amber-100 disabled:opacity-30"
+                            aria-label="Previous"
+                          >
+                            <ChevronLeft className="h-4 w-4" />
+                          </button>
+                          <span className="min-w-[28px] text-center text-[10px] font-semibold text-amber-600">
+                            {retainerSlide + 1}/3
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setRetainerSlide((s) => Math.min(2, s + 1))}
+                            disabled={retainerSlide === 2}
+                            className="flex h-6 w-6 items-center justify-center rounded-full text-amber-600 transition hover:bg-amber-100 disabled:opacity-30"
+                            aria-label="Next"
+                          >
+                            <ChevronRight className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Slide 0 — Valuation */}
+                      {retainerSlide === 0 ? (
+                        <div className="mt-4 space-y-3">
+                          {agencyValuationBenchmarks.length === 0 ? (
+                            <div className="rounded-xl bg-white/70 px-3 py-3">
+                              <p className="text-xs font-medium leading-5 text-slate-500">
+                                No production equity receipts have been calculated yet. Refresh
+                                the AI ledger after connecting GitHub or Vercel activity.
                               </p>
                             </div>
-                          ))
-                        )}
-                      </div>
-                      <div className="mt-4 border-t border-amber-200/70 pt-4">
-                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
-                          Total Equivalent Agency Production Equity Delivered
-                        </p>
-                        <p className="mt-1 text-2xl font-bold text-slate-950">
-                          {currencyFormatter.format(totalAgencyProductionEquity)}
-                        </p>
-                      </div>
+                          ) : (
+                            agencyValuationBenchmarks.map((item) => (
+                              <div key={item.label} className="rounded-xl bg-white/70 px-3 py-2">
+                                <p className="flex items-start text-xs font-semibold leading-5 text-slate-800">
+                                  <span>{item.label}</span>
+                                  <InfoTooltip text={buildLedgerJustificationTooltip(item.entries)} />
+                                </p>
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                  {currencyFormatter.format(item.value)} aggregated verified
+                                  production equity
+                                </p>
+                              </div>
+                            ))
+                          )}
+                          <div className="border-t border-amber-200/70 pt-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                              Total Equivalent Agency Production Equity Delivered
+                            </p>
+                            <p className="mt-1 text-xl font-bold text-slate-950">
+                              {currencyFormatter.format(totalAgencyProductionEquity)}
+                            </p>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {/* Slide 1 — Contract Alignment */}
+                      {retainerSlide === 1 ? (
+                        <div className="mt-4 space-y-3">
+                          {contracts.length === 0 ? (
+                            <div className="rounded-xl bg-white/70 px-3 py-3">
+                              <p className="text-xs font-medium leading-5 text-slate-500">
+                                No contracts are attached to this workspace yet.
+                              </p>
+                            </div>
+                          ) : (
+                            contracts.map((contract) => (
+                              <div key={contract.id} className="rounded-xl bg-white/70 px-3 py-2">
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="text-xs font-semibold leading-5 text-slate-800">
+                                    {contract.title}
+                                  </p>
+                                  <Badge
+                                    variant={
+                                      contract.status === "active" || contract.status === "signed"
+                                        ? "success"
+                                        : contract.status === "expired"
+                                          ? "danger"
+                                          : "secondary"
+                                    }
+                                    className="shrink-0 text-[10px]"
+                                  >
+                                    {contract.status}
+                                  </Badge>
+                                </div>
+                                {contract.monthlyValue > 0 ? (
+                                  <p className="mt-0.5 text-xs text-slate-500">
+                                    {currencyFormatter.format(contract.monthlyValue)}/mo
+                                    {contract.termMonths > 0
+                                      ? ` · ${contract.termMonths} month term`
+                                      : ""}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ))
+                          )}
+                          <div className="border-t border-amber-200/70 pt-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                              Total Contracted Monthly Value
+                            </p>
+                            <p className="mt-1 text-xl font-bold text-slate-950">
+                              {currencyFormatter.format(
+                                contracts.reduce((sum, c) => sum + (c.monthlyValue || 0), 0)
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {/* Slide 2 — Hosting Implications */}
+                      {retainerSlide === 2 ? (
+                        <div className="mt-4 space-y-3">
+                          {expenses.length === 0 ? (
+                            <div className="rounded-xl bg-white/70 px-3 py-3">
+                              <p className="text-xs font-medium leading-5 text-slate-500">
+                                No hosting or infrastructure expenses are recorded for this
+                                workspace.
+                              </p>
+                            </div>
+                          ) : (
+                            expenses.map((expense) => (
+                              <div key={expense.id} className="rounded-xl bg-white/70 px-3 py-2">
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="text-xs font-semibold leading-5 text-slate-800">
+                                    {expense.source}
+                                  </p>
+                                  <Badge
+                                    variant={
+                                      expense.status === "paid"
+                                        ? "success"
+                                        : expense.criticalSystemFlag
+                                          ? "danger"
+                                          : "warning"
+                                    }
+                                    className="shrink-0 text-[10px]"
+                                  >
+                                    {expense.status}
+                                  </Badge>
+                                </div>
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                  {currencyFormatter.format(expense.amount)} · {expense.billingCycleType}
+                                </p>
+                              </div>
+                            ))
+                          )}
+                          <div className="border-t border-amber-200/70 pt-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                              Total Unpaid Hosting Liabilities
+                            </p>
+                            <p className="mt-1 text-xl font-bold text-slate-950">
+                              {currencyFormatter.format(
+                                expenses
+                                  .filter((e) => e.status === "unpaid")
+                                  .reduce((sum, e) => sum + e.amount, 0)
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                     {/* Stripe Receipts */}
                     <div className="rounded-2xl border border-border bg-white/80 p-5">
