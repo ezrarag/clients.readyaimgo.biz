@@ -59,6 +59,12 @@ import { ContractDetailModal } from "@/components/contracts/ContractDetailModal"
 import { getStorageInstance } from "@/lib/firebase/config"
 import { signOut } from "@/lib/firebase/auth"
 import type { BeamContract } from "@/lib/contracts"
+import type { InfrastructureLink } from "@/lib/infrastructure-links"
+import {
+  infraStatusVariant,
+  infraStatusLabel,
+  infraProviderLabel,
+} from "@/lib/infrastructure-links"
 import {
   ALLOWED_MIME_TYPES,
   FILE_INPUT_ACCEPT,
@@ -832,10 +838,12 @@ export default function WorkspacePage() {
   const [payingDeliverableId, setPayingDeliverableId] = useState<string | null>(null)
   const [authorizingExpenseId, setAuthorizingExpenseId] = useState<string | null>(null)
   const [analyzingLedger, setAnalyzingLedger] = useState(false)
-  const [analyzingZohoEmails, setAnalyzingZohoEmails] = useState(false)
+  const [analyzingHosting, setAnalyzingHosting] = useState(false)
+  const [infrastructureLinks, setInfrastructureLinks] = useState<InfrastructureLink[]>([])
   const [domainQuery, setDomainQuery] = useState("")
   const [retainerSlide, setRetainerSlide] = useState(0)
   const autoLedgerRefreshRef = useRef<Set<string>>(new Set())
+  const autoHostingAnalyzedRef = useRef(false)
   const [insufficientExpense, setInsufficientExpense] = useState<WorkspaceExpense | null>(null)
   // Active tab — read from URL on mount so Stripe can redirect back to ?tab=payments
   const [activeTab, setActiveTab] = useState("projects")
@@ -875,35 +883,6 @@ export default function WorkspacePage() {
     [members, user?.uid]
   )
   const canManageWorkspace = currentMember?.role === "owner" || currentMember?.role === "developer"
-  const trackedUtilities = useMemo(
-    () =>
-      [
-        {
-          provider: "Namecheap" as const,
-          label: "Namecheap Domain",
-          cycle: "Domain Renewal",
-        },
-        {
-          provider: "Zoho" as const,
-          label: "Zoho Mail System",
-          cycle: "Business Email Tier",
-        },
-        {
-          provider: "Twilio" as const,
-          label: "Twilio Communication Gate",
-          cycle: "API Consumption",
-        },
-        {
-          provider: "Vercel" as const,
-          label: "Vercel Compute Allocation",
-          cycle: "Compute Allocation",
-        },
-      ].map((utility) => ({
-        ...utility,
-        health: utilityHealthForProvider(expenses, utility.provider),
-      })),
-    [expenses]
-  )
 
   const filteredRepos = useMemo(() => {
     const q = repoQuery.toLowerCase()
@@ -984,7 +963,7 @@ export default function WorkspacePage() {
     setLoading(true)
     setError(null)
     try {
-      const [wsRes, membersRes, projectsRes, reposRes, vercelRes, contractsRes, filesRes, paymentsRes, expensesRes, commsRes] = await Promise.all([
+      const [wsRes, membersRes, projectsRes, reposRes, vercelRes, contractsRes, filesRes, paymentsRes, expensesRes, commsRes, linksRes] = await Promise.all([
         apiFetch<{ workspaces: Workspace[] }>(user, "/api/workspaces"),
         apiFetch<{ members: WorkspaceMember[] }>(
           user,
@@ -1046,6 +1025,10 @@ export default function WorkspacePage() {
           user,
           `/api/workspaces/${params.workspaceId}/correspondence`
         ).catch((): CorrespondenceResponse => ({ items: [], locked: true })),
+        apiFetch<{ links: InfrastructureLink[] }>(
+          user,
+          `/api/workspaces/${params.workspaceId}/infrastructure-links`
+        ).catch(() => ({ links: [] as InfrastructureLink[] })),
       ])
 
       const ws = wsRes.workspaces.find((w) => w.id === params.workspaceId) ?? null
@@ -1069,6 +1052,7 @@ export default function WorkspacePage() {
       setCorrespondence(commsRes.items)
       setCorrespondenceLocked(Boolean(commsRes.locked))
       setMeetingProviders(commsRes.meetingProviders ?? [])
+      setInfrastructureLinks(linksRes.links)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load workspace.")
     } finally {
@@ -1461,39 +1445,76 @@ export default function WorkspacePage() {
     void handleAnalyzeLedger({ source: "page-load", silent: true })
   }, [handleAnalyzeLedger, loading, params.workspaceId, paymentData?.clientId, user, workspace])
 
-  const handleAnalyzeZohoEmails = async () => {
-    if (!user || analyzingZohoEmails) return
-    setAnalyzingZohoEmails(true)
-    setError(null)
-    setMessage(null)
-    try {
-      const res = await apiFetch<{
-        success: boolean
-        records: Array<{ id: string }>
-        analyzedEmails?: number
-        message?: string
-      }>(user, `/api/workspaces/${params.workspaceId}/infrastructure/analyze-zoho-emails`, {
-        method: "POST",
-        body: JSON.stringify({ source: "hosting-tab" }),
-      })
-      if (res.records.length > 0) {
-        setMessage(
-          `Zoho email analysis created ${res.records.length} source-backed infrastructure record${res.records.length === 1 ? "" : "s"} from ${res.analyzedEmails ?? "available"} email${res.analyzedEmails === 1 ? "" : "s"}.`
-        )
-      } else {
-        setMessage(res.message ?? "Zoho email analysis found no source-backed records.")
+  const handleAnalyzeHosting = useCallback(
+    async (opts: { force?: boolean; silent?: boolean } = {}) => {
+      if (!user || analyzingHosting) return
+      setAnalyzingHosting(true)
+      if (!opts.silent) {
+        setError(null)
+        setMessage(null)
       }
-      const updatedExpenses = await apiFetch<{ expenses: WorkspaceExpense[] }>(
-        user,
-        `/api/workspaces/${params.workspaceId}/expenses`
-      )
-      setExpenses(updatedExpenses.expenses)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to analyze Zoho emails.")
-    } finally {
-      setAnalyzingZohoEmails(false)
+      try {
+        const res = await apiFetch<{
+          success: boolean
+          skipped?: boolean
+          records: Array<{ id: string }>
+          evidenceCount?: number
+          message?: string
+        }>(user, `/api/workspaces/${params.workspaceId}/infrastructure/analyze`, {
+          method: "POST",
+          body: JSON.stringify({ force: opts.force ?? false }),
+        })
+
+        // Refresh both infrastructure links and expenses after analysis
+        const [linksRes, expensesRes] = await Promise.all([
+          apiFetch<{ links: InfrastructureLink[] }>(
+            user,
+            `/api/workspaces/${params.workspaceId}/infrastructure-links`
+          ).catch(() => ({ links: [] as InfrastructureLink[] })),
+          apiFetch<{ expenses: WorkspaceExpense[] }>(
+            user,
+            `/api/workspaces/${params.workspaceId}/expenses`
+          ).catch(() => ({ expenses: [] as WorkspaceExpense[] })),
+        ])
+        setInfrastructureLinks(linksRes.links)
+        setExpenses(expensesRes.expenses)
+
+        if (!opts.silent && !res.skipped) {
+          setMessage(
+            res.records.length > 0
+              ? `Found ${res.records.length} hosting record${res.records.length === 1 ? "" : "s"} from ${res.evidenceCount ?? "available"} evidence item${res.evidenceCount === 1 ? "" : "s"}.`
+              : (res.message ?? "No hosting records found in the available evidence.")
+          )
+        }
+      } catch (err) {
+        if (!opts.silent) {
+          setError(err instanceof Error ? err.message : "Unable to analyze hosting records.")
+        }
+      } finally {
+        setAnalyzingHosting(false)
+      }
+    },
+    [analyzingHosting, params.workspaceId, user]
+  )
+
+  // Auto-analyze when the Hosting tab opens, once per session, if no links exist yet.
+  useEffect(() => {
+    if (
+      activeTab !== "vercel" ||
+      autoHostingAnalyzedRef.current ||
+      loading ||
+      !user ||
+      !workspace
+    ) {
+      return
     }
-  }
+    if (infrastructureLinks.length === 0) {
+      autoHostingAnalyzedRef.current = true
+      void handleAnalyzeHosting({ silent: true })
+    } else {
+      autoHostingAnalyzedRef.current = true
+    }
+  }, [activeTab, handleAnalyzeHosting, infrastructureLinks.length, loading, user, workspace])
 
   const authorizeExpenseDisbursement = async (expenseId: string) => {
     if (!user || !workspace || currentMember?.role !== "owner") return
@@ -2561,25 +2582,25 @@ export default function WorkspacePage() {
                 <div>
                   <CardTitle className="flex items-center gap-2">
                     Hosting & Infrastructure
-                    <HelpMark text="Service health shows DNS, mail, communication APIs, and compute dependencies. Expense cards highlight unpaid invoices that can affect production availability." />
+                    <HelpMark text="Cards appear only when real evidence exists — from email correspondence, admin records, or connected deployments. Nothing is shown by default." />
                   </CardTitle>
                   <CardDescription>
-                    Service health, domain status, and connected deployment assets.
+                    Evidence-backed service health, domain status, and connected deployment assets.
                   </CardDescription>
                 </div>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => void handleAnalyzeZohoEmails()}
-                  disabled={analyzingZohoEmails}
+                  onClick={() => void handleAnalyzeHosting({ force: true })}
+                  disabled={analyzingHosting}
                 >
-                  {analyzingZohoEmails ? (
+                  {analyzingHosting ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
                     <Sparkles className="mr-2 h-4 w-4" />
                   )}
-                  {analyzingZohoEmails ? "Analyzing Zoho" : "Analyze Zoho Emails"}
+                  {analyzingHosting ? "Scanning…" : "Refresh Hosting Records"}
                 </Button>
               </div>
             </CardHeader>
@@ -2595,20 +2616,64 @@ export default function WorkspacePage() {
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                   Hosting Status
                 </p>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  {trackedUtilities.map((utility) => (
-                    <div
-                      key={utility.provider}
-                      className="rounded-2xl border border-border bg-white/80 px-4 py-3"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-semibold text-slate-900">{utility.label}</p>
-                        <Badge variant={utility.health.variant}>{utility.health.label}</Badge>
+
+                {/* Evidence-driven provider cards */}
+                {analyzingHosting && infrastructureLinks.length === 0 ? (
+                  <div className="flex items-center gap-3 rounded-2xl border border-border bg-slate-50/70 px-4 py-5">
+                    <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                    <p className="text-xs text-slate-500">Scanning hosting records…</p>
+                  </div>
+                ) : infrastructureLinks.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-border bg-slate-50/70 px-6 py-8 text-center">
+                    <Globe2 className="mx-auto mb-3 h-7 w-7 text-slate-300" />
+                    <p className="text-sm font-medium text-slate-600">No hosting records are attached yet.</p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Search a domain below, or click Refresh Hosting Records to check for existing services.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {infrastructureLinks.map((link) => (
+                      <div
+                        key={link.id}
+                        className="rounded-2xl border border-border bg-white/80 px-4 py-3"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-900">
+                              {infraProviderLabel(link)}
+                            </p>
+                            {link.domain ? (
+                              <p className="mt-0.5 truncate text-xs text-slate-500">{link.domain}</p>
+                            ) : null}
+                          </div>
+                          <Badge variant={infraStatusVariant(link.status)} className="shrink-0">
+                            {infraStatusLabel(link.status)}
+                          </Badge>
+                        </div>
+                        {link.amount ? (
+                          <p className="mt-2 text-sm font-semibold text-slate-900">
+                            {currencyFormatter.format(link.amount)}
+                            {link.dueDate ? (
+                              <span className="ml-1 text-xs font-normal text-slate-500">
+                                due{" "}
+                                {new Date(link.dueDate).toLocaleDateString("en-US", {
+                                  month: "short",
+                                  day: "numeric",
+                                })}
+                              </span>
+                            ) : null}
+                          </p>
+                        ) : null}
+                        {link.evidenceSnippet ? (
+                          <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-400">
+                            {link.evidenceSnippet}
+                          </p>
+                        ) : null}
                       </div>
-                      <p className="mt-1 text-xs leading-5 text-slate-500">{utility.health.detail}</p>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
 
                 {expenses.length > 0 ? (
                   <div className="space-y-2">
@@ -2686,54 +2751,77 @@ export default function WorkspacePage() {
                   Domain
                 </p>
                 {(() => {
+                  // Prefer infrastructure link evidence; fall back to expenses for payment CTA
+                  const domainLinks = infrastructureLinks.filter((l) => l.type === "domain")
                   const domainExpenses = expenses.filter(
                     (e) =>
                       e.serviceProvider === "Namecheap" &&
                       e.billingCycleType === "Domain Renewal"
                   )
-                  if (domainExpenses.length > 0) {
+
+                  if (domainLinks.length > 0) {
                     return (
                       <div className="space-y-2">
-                        {domainExpenses.map((de) => (
-                          <div
-                            key={de.id}
-                            className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-white/80 px-4 py-3"
-                          >
-                            <div>
-                              <p className="text-sm font-semibold text-slate-900">{de.source}</p>
-                              <p className="mt-0.5 text-xs text-slate-500">
-                                {de.status === "unpaid" && de.dueDate
-                                  ? `Renewal due ${new Date(de.dueDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`
-                                  : "Domain active"}
-                              </p>
+                        {domainLinks.map((dl) => {
+                          // Find a matching unpaid expense for the payment CTA
+                          const matchingExpense = domainExpenses.find(
+                            (e) =>
+                              e.status === "unpaid" &&
+                              (!dl.domain || e.source.toLowerCase().includes(dl.domain.toLowerCase()))
+                          )
+                          return (
+                            <div
+                              key={dl.id}
+                              className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-white/80 px-4 py-3"
+                            >
+                              <div>
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {dl.domain ?? dl.evidenceSnippet ?? "Domain"}
+                                </p>
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                  {dl.status === "renewal_due" || dl.status === "unpaid"
+                                    ? dl.dueDate
+                                      ? `Renewal due ${new Date(dl.dueDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`
+                                      : "Renewal due"
+                                    : dl.status === "active"
+                                      ? "Domain active"
+                                      : infraStatusLabel(dl.status)}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                {dl.amount ? (
+                                  <p className="text-sm font-semibold text-slate-900">
+                                    {currencyFormatter.format(dl.amount)}
+                                  </p>
+                                ) : null}
+                                {matchingExpense ? (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => void authorizeExpenseDisbursement(matchingExpense.id)}
+                                    disabled={
+                                      currentMember?.role !== "owner" ||
+                                      authorizingExpenseId === matchingExpense.id
+                                    }
+                                  >
+                                    {authorizingExpenseId === matchingExpense.id ? (
+                                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                                    ) : null}
+                                    Pay to Keep Active
+                                  </Button>
+                                ) : (
+                                  <Badge variant={infraStatusVariant(dl.status)}>
+                                    {infraStatusLabel(dl.status)}
+                                  </Badge>
+                                )}
+                              </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                              <p className="text-sm font-semibold text-slate-900">
-                                {currencyFormatter.format(de.amount)}
-                              </p>
-                              {de.status === "unpaid" ? (
-                                <Button
-                                  size="sm"
-                                  onClick={() => void authorizeExpenseDisbursement(de.id)}
-                                  disabled={
-                                    currentMember?.role !== "owner" ||
-                                    authorizingExpenseId === de.id
-                                  }
-                                >
-                                  {authorizingExpenseId === de.id ? (
-                                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                                  ) : null}
-                                  Pay to Keep Active
-                                </Button>
-                              ) : (
-                                <Badge variant="success">Active</Badge>
-                              )}
-                            </div>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     )
                   }
+
+                  // No domain link — show domain search
                   return (
                     <div className="space-y-2">
                       <div className="flex flex-col gap-2 sm:flex-row">
