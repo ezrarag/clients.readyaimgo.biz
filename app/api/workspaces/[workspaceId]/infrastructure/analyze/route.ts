@@ -17,11 +17,17 @@ import { FieldValue } from "firebase-admin/firestore"
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
 import { getBearerToken } from "@/lib/portal-auth"
 import { WorkspaceAuthError, assertWorkspaceRole } from "@/lib/workspace-auth"
+import {
+  enrichVercelProjectsWithDomains,
+  getVercelToken,
+  matchReposToVercelProjects,
+} from "@/lib/vercel-server"
 import type {
   InfrastructureProvider,
   InfrastructureType,
   InfrastructureStatus,
 } from "@/lib/infrastructure-links"
+import type { GitHubRepo, VercelProject } from "@/lib/workspaces"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
@@ -53,6 +59,69 @@ interface EvidenceItem {
   text: string
 }
 
+interface VercelDomain {
+  name?: string
+  verified?: boolean
+  registrar?: string | null
+  renew?: boolean | null
+  expiresAt?: number | string | null
+  boughtAt?: number | string | null
+  createdAt?: number | string | null
+}
+
+interface VercelDomainsResponse {
+  domains?: VercelDomain[]
+  pagination?: { next?: number | null }
+}
+
+interface VercelProjectDomainResponse {
+  name?: string
+  verified?: boolean
+  verification?: unknown[]
+}
+
+interface VercelProjectDomain {
+  name?: string
+  verified?: boolean
+  createdAt?: number | string | null
+  updatedAt?: number | string | null
+  gitBranch?: string | null
+}
+
+interface VercelProjectDomainsResponse {
+  domains?: VercelProjectDomain[]
+}
+
+interface VercelDomainRecord {
+  provider: InfrastructureProvider
+  type: InfrastructureType
+  domain: string
+  status: InfrastructureStatus
+  amount: null
+  dueDate: string | null
+  sourceSystem: "vercel-domain"
+  sourceRef: string
+  evidenceSnippet: string
+  confidence: number
+  clientVisible: boolean
+  verified: boolean
+  registrar: string | null
+  expirationSource: string
+  vercelProjectId: string | null
+  vercelProjectName: string | null
+  vercelRenew: boolean | null
+}
+
+interface VercelScanDiagnostics {
+  attachedVercelProjects: number
+  projectDomainsFound: number
+  accountDomainsFound: number
+  matchedDomains: number
+  repoMatchedVercelProjects: number
+  repoMatchedDomains: number
+  warnings: string[]
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function readString(value: unknown, maxLen = 500) {
@@ -82,6 +151,111 @@ function getAnthropicKey() {
 
 function compact(value: unknown, maxLen = 400) {
   return readString(value, maxLen)?.replace(/\s+/g, " ") ?? ""
+}
+
+function cleanDomain(value: unknown) {
+  const raw = readString(value, 300)
+  if (!raw) return null
+  const withoutProtocol = raw.replace(/^https?:\/\//i, "").replace(/^www\./i, "")
+  const host = withoutProtocol.split(/[/?#]/)[0]?.trim().toLowerCase()
+  return host && host.includes(".") ? host : null
+}
+
+function timestampToIso(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const millis = value > 10_000_000_000 ? value : value * 1000
+    const date = new Date(millis)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }
+  if (typeof value === "string" && value.trim()) {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }
+  return null
+}
+
+function domainMatchesCandidate(domain: string, candidates: Set<string>) {
+  const normalized = cleanDomain(domain)
+  if (!normalized) return false
+  for (const candidate of candidates) {
+    if (
+      normalized === candidate ||
+      normalized.endsWith(`.${candidate}`) ||
+      candidate.endsWith(`.${normalized}`)
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+function vercelProviderForRegistrar(registrar: string | null): InfrastructureProvider {
+  const raw = registrar?.toLowerCase() ?? ""
+  if (raw.includes("namecheap")) return "Namecheap"
+  return "Vercel"
+}
+
+async function fetchVercelJson<T>(url: string, token: string): Promise<T> {
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  })
+  if (!response.ok) {
+    const body = await response.text().catch(() => "")
+    throw new Error(`Vercel API ${response.status}: ${body || response.statusText}`)
+  }
+  return (await response.json()) as T
+}
+
+async function fetchVercelDomains(token: string, teamId: string | null) {
+  const domains: VercelDomain[] = []
+  let until: number | null = null
+
+  do {
+    const params = new URLSearchParams({ limit: "100" })
+    if (teamId) params.set("teamId", teamId)
+    if (until) params.set("until", String(until))
+
+    const payload = await fetchVercelJson<VercelDomainsResponse>(
+      `https://api.vercel.com/v5/domains?${params.toString()}`,
+      token
+    )
+    domains.push(...(payload.domains ?? []))
+    until = payload.pagination?.next ?? null
+  } while (until)
+
+  return domains
+}
+
+async function fetchVercelProjectDomain(params: {
+  token: string
+  teamId: string | null
+  projectIdOrName: string
+  domain: string
+}) {
+  const query = new URLSearchParams()
+  if (params.teamId) query.set("teamId", params.teamId)
+  const queryString = query.toString()
+  const suffix = queryString ? `?${queryString}` : ""
+  return fetchVercelJson<VercelProjectDomainResponse>(
+    `https://api.vercel.com/v9/projects/${encodeURIComponent(params.projectIdOrName)}/domains/${encodeURIComponent(params.domain)}${suffix}`,
+    params.token
+  ).catch(() => null)
+}
+
+async function fetchVercelProjectDomains(params: {
+  token: string
+  teamId: string | null
+  projectIdOrName: string
+}) {
+  const query = new URLSearchParams({ limit: "100" })
+  if (params.teamId) query.set("teamId", params.teamId)
+  return fetchVercelJson<VercelProjectDomainsResponse>(
+    `https://api.vercel.com/v9/projects/${encodeURIComponent(params.projectIdOrName)}/domains?${query.toString()}`,
+    params.token
+  )
 }
 
 // ─── Evidence collectors ──────────────────────────────────────────────────────
@@ -163,6 +337,317 @@ async function collectActivityEvidence(
       } satisfies EvidenceItem
     })
     .filter((item): item is EvidenceItem => item !== null)
+}
+
+async function collectWorkspaceDomainCandidates(
+  db: FirebaseFirestore.Firestore,
+  workspaceId: string,
+  workspace: Record<string, unknown>
+) {
+  const candidates = new Set<string>()
+  const add = (value: unknown) => {
+    const domain = cleanDomain(value)
+    if (domain) candidates.add(domain)
+  }
+
+  add(workspace.targetDomain)
+  add(workspace.primaryDomain)
+  for (const domain of Array.isArray(workspace.domains) ? workspace.domains : []) add(domain)
+
+  const hosting = (
+    typeof workspace.hosting === "object" && workspace.hosting !== null
+      ? workspace.hosting
+      : {}
+  ) as Record<string, unknown>
+  for (const registrar of Array.isArray(hosting.domainRegistrars)
+    ? (hosting.domainRegistrars as Array<Record<string, unknown>>)
+    : []) {
+    add(registrar.domain)
+  }
+
+  for (const project of Array.isArray(workspace.vercelProjects)
+    ? (workspace.vercelProjects as Array<Record<string, unknown>>)
+    : []) {
+    add(project.url)
+    for (const domain of Array.isArray(project.domains) ? project.domains : []) add(domain)
+  }
+
+  const projectSnaps = await Promise.all([
+    db.collection("projects").where("workspaceId", "==", workspaceId).limit(50).get().catch(() => null),
+    readString(workspace.clientId)
+      ? db
+          .collection("projects")
+          .where("clientId", "==", readString(workspace.clientId))
+          .limit(50)
+          .get()
+          .catch(() => null)
+      : Promise.resolve(null),
+    Promise.all(
+      (Array.isArray(workspace.projectIds) ? workspace.projectIds : [])
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .slice(0, 30)
+        .map((projectId) => db.collection("projects").doc(projectId).get().catch(() => null))
+    ),
+  ])
+
+  const projectDocs = [
+    ...(projectSnaps[0]?.docs ?? []),
+    ...(projectSnaps[1]?.docs ?? []),
+    ...projectSnaps[2].filter((doc): doc is FirebaseFirestore.DocumentSnapshot => Boolean(doc?.exists)),
+  ]
+  for (const doc of projectDocs) {
+    const project = doc.data() as Record<string, unknown>
+    add(project.liveUrl)
+    add(project.deployUrl)
+    add(project.productionUrl)
+    add(project.url)
+    for (const domain of Array.isArray(project.domains) ? project.domains : []) add(domain)
+  }
+
+  return candidates
+}
+
+async function collectVercelDomainRecords(params: {
+  db: FirebaseFirestore.Firestore
+  workspaceId: string
+  workspace: Record<string, unknown>
+}) {
+  const diagnostics: VercelScanDiagnostics = {
+    attachedVercelProjects: 0,
+    projectDomainsFound: 0,
+    accountDomainsFound: 0,
+    matchedDomains: 0,
+    repoMatchedVercelProjects: 0,
+    repoMatchedDomains: 0,
+    warnings: [],
+  }
+  const token = getVercelToken()
+  if (!token) {
+    diagnostics.warnings.push("Vercel token not configured.")
+    return { records: [] as VercelDomainRecord[], diagnostics }
+  }
+
+  const teamId = readString(params.workspace.vercelTeamId) || process.env.VERCEL_TEAM_ID || null
+  const workspaceVercelProjects = Array.isArray(params.workspace.vercelProjects)
+    ? (params.workspace.vercelProjects as Array<Record<string, unknown>>)
+    : []
+  let vercelProjects = workspaceVercelProjects
+
+  if (vercelProjects.length === 0 && Array.isArray(params.workspace.repos)) {
+    const repos = (params.workspace.repos as unknown[]).filter(
+      (repo): repo is GitHubRepo =>
+        typeof repo === "object" &&
+        repo !== null &&
+        typeof (repo as Record<string, unknown>).fullName === "string" &&
+        typeof (repo as Record<string, unknown>).id === "number"
+    )
+    const match = await matchReposToVercelProjects({ repos, token, teamId }).catch((error) => ({
+      projects: [] as VercelProject[],
+      diagnostics: {
+        scannedVercelProjects: 0,
+        matchedVercelProjects: 0,
+        matchedDomains: 0,
+        warnings: [
+          error instanceof Error
+            ? error.message
+            : "Unable to reconcile GitHub repositories with Vercel projects.",
+        ],
+      },
+    }))
+    diagnostics.repoMatchedVercelProjects = match.diagnostics.matchedVercelProjects
+    diagnostics.repoMatchedDomains = match.diagnostics.matchedDomains
+    diagnostics.warnings.push(...match.diagnostics.warnings)
+
+    if (match.projects.length > 0) {
+      vercelProjects = match.projects as unknown as Array<Record<string, unknown>>
+      await params.db.collection("workspaces").doc(params.workspaceId).set(
+        {
+          vercelProjects: match.projects,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+    }
+  } else if (vercelProjects.length > 0) {
+    const enriched = await enrichVercelProjectsWithDomains({
+      projects: vercelProjects as unknown as VercelProject[],
+      token,
+      teamId,
+    })
+    vercelProjects = enriched as unknown as Array<Record<string, unknown>>
+  }
+
+  diagnostics.attachedVercelProjects = vercelProjects.length
+
+  const projectDomainMatches = new Map<
+    string,
+    {
+      domain: string
+      verified: boolean | null
+      vercelProjectId: string | null
+      vercelProjectName: string | null
+    }
+  >()
+
+  for (const project of vercelProjects) {
+    const projectId = readString(project.id)
+    const projectName = readString(project.name)
+    const projectLookupKey = projectId ?? projectName
+    if (!projectLookupKey) continue
+
+    const projectDomains = await fetchVercelProjectDomains({
+      token,
+      teamId,
+      projectIdOrName: projectLookupKey,
+    }).catch((error) => {
+      diagnostics.warnings.push(
+        `Unable to scan Vercel domains for ${projectName ?? projectId ?? "attached project"}: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`
+      )
+      return null
+    })
+
+    for (const domain of projectDomains?.domains ?? []) {
+      const name = cleanDomain(domain.name)
+      if (!name) continue
+      projectDomainMatches.set(name, {
+        domain: name,
+        verified: typeof domain.verified === "boolean" ? domain.verified : null,
+        vercelProjectId: projectId,
+        vercelProjectName: projectName,
+      })
+    }
+  }
+  diagnostics.projectDomainsFound = projectDomainMatches.size
+
+  const candidates = await collectWorkspaceDomainCandidates(
+    params.db,
+    params.workspaceId,
+    params.workspace
+  )
+
+  let domains: VercelDomain[] = []
+  try {
+    domains = await fetchVercelDomains(token, teamId)
+  } catch (error) {
+    diagnostics.warnings.push(
+      error instanceof Error ? error.message : "Unable to scan Vercel account domains."
+    )
+  }
+  diagnostics.accountDomainsFound = domains.length
+
+  const accountDomainMap = new Map(
+    domains.flatMap((domain) => {
+      const name = cleanDomain(domain.name)
+      return name ? [[name, domain] as const] : []
+    })
+  )
+  const matchedDomainNames = new Set<string>(projectDomainMatches.keys())
+  for (const domain of domains) {
+    const name = cleanDomain(domain.name)
+    if (!name) continue
+    if (domainMatchesCandidate(name, candidates)) matchedDomainNames.add(name)
+  }
+  diagnostics.matchedDomains = matchedDomainNames.size
+
+  const records: VercelDomainRecord[] = []
+
+  for (const name of matchedDomainNames) {
+    const domain = accountDomainMap.get(name) ?? { name }
+    const projectMatch = projectDomainMatches.get(name)
+
+    let projectBinding: {
+      verified: boolean | null
+      vercelProjectId: string | null
+      vercelProjectName: string | null
+    } = {
+      verified:
+        typeof projectMatch?.verified === "boolean"
+          ? projectMatch.verified
+          : typeof domain.verified === "boolean"
+            ? domain.verified
+            : null,
+      vercelProjectId: projectMatch?.vercelProjectId ?? null,
+      vercelProjectName: projectMatch?.vercelProjectName ?? null,
+    }
+
+    if (!projectMatch) {
+      for (const project of vercelProjects) {
+        const projectId = readString(project.id)
+        const projectName = readString(project.name)
+        const projectDomains = new Set<string>()
+        addProjectDomain(projectDomains, project.url)
+        for (const item of Array.isArray(project.domains) ? project.domains : []) {
+          addProjectDomain(projectDomains, item)
+        }
+        if (![...projectDomains].some((candidate) => domainMatchesCandidate(name, new Set([candidate])))) {
+          continue
+        }
+
+        const projectLookupKey = projectId ?? projectName
+        const projectDomain = projectLookupKey
+          ? await fetchVercelProjectDomain({
+              token,
+              teamId,
+              projectIdOrName: projectLookupKey,
+              domain: name,
+            })
+          : null
+        projectBinding = {
+          verified:
+            typeof projectDomain?.verified === "boolean"
+              ? projectDomain.verified
+              : typeof domain.verified === "boolean"
+                ? domain.verified
+                : null,
+          vercelProjectId: projectId,
+          vercelProjectName: projectName,
+        }
+        break
+      }
+    }
+
+    const verified = projectBinding.verified === true
+    const registrar = readString(domain.registrar, 120)
+    const expiresAt = timestampToIso(domain.expiresAt)
+    const provider = vercelProviderForRegistrar(registrar)
+    const registrarLabel = registrar ?? "not reported"
+    const expirationSource = expiresAt ? "vercel" : "unavailable-from-vercel"
+
+    records.push({
+      provider,
+      type: "domain",
+      domain: name,
+      status: verified ? "active" : "pending",
+      amount: null,
+      dueDate: expiresAt,
+      sourceSystem: "vercel-domain",
+      sourceRef: name,
+      evidenceSnippet: `Domain attached through Vercel; registrar: ${registrarLabel}; ${
+        verified ? "verified" : "needs verification"
+      }; ${expiresAt ? "expiration tracked by Vercel" : "expiration not available from Vercel"}.`,
+      confidence: verified ? 0.95 : 0.86,
+      clientVisible: true,
+      verified,
+      registrar,
+      expirationSource,
+      vercelProjectId: projectBinding.vercelProjectId,
+      vercelProjectName: projectBinding.vercelProjectName,
+      vercelRenew: typeof domain.renew === "boolean" ? domain.renew : null,
+    })
+  }
+
+  if (diagnostics.attachedVercelProjects > 0 && diagnostics.projectDomainsFound === 0) {
+    diagnostics.warnings.push("No custom domains were found on attached Vercel projects.")
+  }
+
+  return { records, diagnostics }
+}
+
+function addProjectDomain(target: Set<string>, value: unknown) {
+  const domain = cleanDomain(value)
+  if (domain) target.add(domain)
 }
 
 /** Admin-created hosting metadata on the workspace doc itself. */
@@ -384,15 +869,49 @@ export async function POST(
       return NextResponse.json({ error: "Workspace not found." }, { status: 404 })
     }
     const workspace = workspaceSnap.data() as Record<string, unknown>
+    const vercelScan = await collectVercelDomainRecords({
+      db,
+      workspaceId: params.workspaceId,
+      workspace,
+    })
+    const hadExistingLinks = !(
+      await workspaceRef.collection("infrastructureLinks").limit(1).get()
+    ).empty
+    const vercelCreated: Array<Record<string, unknown>> = []
+
+    if (vercelScan.records.length > 0) {
+      const vercelBatch = db.batch()
+      for (const record of vercelScan.records.slice(0, 25)) {
+        const fingerprint = stableId(
+          [
+            params.workspaceId,
+            record.sourceSystem,
+            record.domain,
+            record.vercelProjectId,
+          ].join("|")
+        )
+        const linkRef = workspaceRef.collection("infrastructureLinks").doc(`vercel_domain_${fingerprint}`)
+        vercelBatch.set(
+          linkRef,
+          {
+            ...record,
+            createdByUid: decoded.uid,
+            createdByEmail: decoded.email ?? null,
+            updatedAt: FieldValue.serverTimestamp(),
+            createdAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+        vercelCreated.push({ id: linkRef.id, ...record })
+      }
+      vercelBatch.set(workspaceRef, { updatedAt: FieldValue.serverTimestamp() }, { merge: true })
+      await vercelBatch.commit()
+    }
 
     // ── Idempotency check ─────────────────────────────────────────────────────
     if (!force) {
-      const existingSnap = await workspaceRef
-        .collection("infrastructureLinks")
-        .limit(1)
-        .get()
-      if (!existingSnap.empty) {
-        // Already has evidence — return existing links without re-running Claude
+      if (hadExistingLinks) {
+        // Already has evidence — Vercel was refreshed above, so avoid re-running Claude.
         const existingLinks = await workspaceRef
           .collection("infrastructureLinks")
           .orderBy("createdAt", "desc")
@@ -405,7 +924,13 @@ export async function POST(
             id: doc.id,
             ...doc.data(),
           })),
-          message: "Hosting records already exist. Pass force=true to re-analyze.",
+          evidenceCount: vercelScan.records.length,
+          diagnostics: vercelScan.diagnostics,
+          warning: vercelScan.diagnostics.warnings.join(" ") || null,
+          message:
+            vercelCreated.length > 0
+              ? "Vercel domain records were refreshed. Pass force=true to re-analyze email and activity evidence."
+              : "Hosting records already exist. Pass force=true to re-analyze.",
         })
       }
     }
@@ -430,9 +955,14 @@ export async function POST(
     if (evidence.length === 0) {
       return NextResponse.json({
         success: true,
-        records: [],
+        records: vercelCreated,
+        evidenceCount: vercelScan.records.length,
+        diagnostics: vercelScan.diagnostics,
+        warning: vercelScan.diagnostics.warnings.join(" ") || null,
         message:
-          "No hosting evidence was found across correspondence, activity, or workspace records.",
+          vercelCreated.length > 0
+            ? "Vercel domain records were refreshed; no additional hosting evidence was found."
+            : "No hosting evidence was found across Vercel, correspondence, activity, or workspace records.",
       })
     }
 
@@ -459,8 +989,14 @@ export async function POST(
     if (normalized.length === 0) {
       return NextResponse.json({
         success: true,
-        records: [],
-        message: "Analysis found no source-backed hosting records in the evidence.",
+        records: vercelCreated,
+        evidenceCount: evidence.length + vercelScan.records.length,
+        diagnostics: vercelScan.diagnostics,
+        warning: vercelScan.diagnostics.warnings.join(" ") || null,
+        message:
+          vercelCreated.length > 0
+            ? "Vercel domain records were refreshed; analysis found no additional source-backed hosting records."
+            : "Analysis found no source-backed hosting records in the evidence.",
       })
     }
 
@@ -502,8 +1038,10 @@ export async function POST(
 
     return NextResponse.json({
       success: true,
-      records: created,
-      evidenceCount: evidence.length,
+      records: [...vercelCreated, ...created],
+      evidenceCount: evidence.length + vercelScan.records.length,
+      diagnostics: vercelScan.diagnostics,
+      warning: vercelScan.diagnostics.warnings.join(" ") || null,
     })
   } catch (error) {
     if (error instanceof WorkspaceAuthError) {

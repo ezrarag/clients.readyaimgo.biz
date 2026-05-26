@@ -57,6 +57,15 @@ export interface InfrastructureLink {
   confidence: number
   /** Whether this record should be shown in the client portal. */
   clientVisible: boolean
+  /** Vercel domain/project verification state when the source is Vercel. */
+  verified: boolean | null
+  /** Registrar label returned by Vercel or captured from email/admin evidence. */
+  registrar: string | null
+  /** Human-readable source of the expiration/due date, when known. */
+  expirationSource: string | null
+  /** Vercel project id/name that confirmed the domain binding. */
+  vercelProjectId: string | null
+  vercelProjectName: string | null
   createdAt: string | null
   updatedAt: string | null
 }
@@ -128,6 +137,23 @@ export function normalizeInfrastructureLink(
         : null,
     confidence,
     clientVisible: data.clientVisible !== false,
+    verified: typeof data.verified === "boolean" ? data.verified : null,
+    registrar:
+      typeof data.registrar === "string" && data.registrar.trim()
+        ? data.registrar.trim()
+        : null,
+    expirationSource:
+      typeof data.expirationSource === "string" && data.expirationSource.trim()
+        ? data.expirationSource.trim()
+        : null,
+    vercelProjectId:
+      typeof data.vercelProjectId === "string" && data.vercelProjectId.trim()
+        ? data.vercelProjectId.trim()
+        : null,
+    vercelProjectName:
+      typeof data.vercelProjectName === "string" && data.vercelProjectName.trim()
+        ? data.vercelProjectName.trim()
+        : null,
     createdAt: serializeTimestamp(data.createdAt),
     updatedAt: serializeTimestamp(data.updatedAt),
   }

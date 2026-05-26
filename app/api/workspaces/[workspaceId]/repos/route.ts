@@ -3,6 +3,11 @@ import { FieldValue } from "firebase-admin/firestore"
 
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
 import { getBearerToken } from "@/lib/portal-auth"
+import {
+  enrichVercelProjectsWithDomains,
+  getVercelToken,
+  matchReposToVercelProjects,
+} from "@/lib/vercel-server"
 import type { GitHubRepo, VercelProject } from "@/lib/workspaces"
 import { normalizeWorkspace } from "@/lib/workspaces"
 
@@ -46,6 +51,10 @@ function githubProjectId(workspaceId: string, repo: GitHubRepo) {
 
 function vercelProjectId(workspaceId: string, project: VercelProject) {
   return safeDocId(`${workspaceId}__vercel__${project.id}`)
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null
 }
 
 function githubProjectPayload(
@@ -143,12 +152,38 @@ export async function POST(
     const current = workspaceSnap.data() as Record<string, unknown>
     const existingRepos: GitHubRepo[] = Array.isArray(current.repos) ? current.repos as GitHubRepo[] : []
     const existingVercel: VercelProject[] = Array.isArray(current.vercelProjects) ? current.vercelProjects as VercelProject[] : []
+    const teamId = readString(current.vercelTeamId) || process.env.VERCEL_TEAM_ID || null
+    const vercelToken = getVercelToken()
+    const enrichedIncomingVercel = await enrichVercelProjectsWithDomains({
+      projects: incomingVercel,
+      token: vercelToken,
+      teamId,
+    })
+    const repoVercelMatch = await matchReposToVercelProjects({
+      repos: incomingRepos,
+      token: vercelToken,
+      teamId,
+    }).catch((error) => ({
+      projects: [] as VercelProject[],
+      diagnostics: {
+        scannedVercelProjects: 0,
+        matchedVercelProjects: 0,
+        matchedDomains: 0,
+        warnings: [
+          error instanceof Error
+            ? error.message
+            : "Unable to reconcile GitHub repositories with Vercel projects.",
+        ],
+      },
+    }))
 
     // Merge — deduplicate by id/fullName
     const repoMap = new Map<number, GitHubRepo>()
     for (const r of [...existingRepos, ...incomingRepos]) repoMap.set(r.id, r)
     const vercelMap = new Map<string, VercelProject>()
-    for (const p of [...existingVercel, ...incomingVercel]) vercelMap.set(p.id, p)
+    for (const p of [...existingVercel, ...enrichedIncomingVercel, ...repoVercelMatch.projects]) {
+      vercelMap.set(p.id, p)
+    }
 
     const existingProjectIds = Array.isArray(current.projectIds)
       ? (current.projectIds as unknown[]).filter((id): id is string => typeof id === "string")
@@ -158,7 +193,11 @@ export async function POST(
         id: githubProjectId(params.workspaceId, repo),
         payload: githubProjectPayload(params.workspaceId, repo, current),
       })),
-      ...incomingVercel.map((project) => ({
+      ...enrichedIncomingVercel.map((project) => ({
+        id: vercelProjectId(params.workspaceId, project),
+        payload: vercelProjectPayload(params.workspaceId, project, current),
+      })),
+      ...repoVercelMatch.projects.map((project) => ({
         id: vercelProjectId(params.workspaceId, project),
         payload: vercelProjectPayload(params.workspaceId, project, current),
       })),
@@ -190,6 +229,9 @@ export async function POST(
       success: true,
       workspace: updated,
       projects: generatedProjects.map((project) => responseProject(project.id, project.payload)),
+      diagnostics: {
+        repoVercelReconciliation: repoVercelMatch.diagnostics,
+      },
     })
   } catch (error) {
     const status = (error as Error & { status?: number }).status ?? 500

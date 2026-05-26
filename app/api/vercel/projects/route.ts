@@ -2,29 +2,13 @@ import { type NextRequest, NextResponse } from "next/server"
 
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
 import { getBearerToken } from "@/lib/portal-auth"
-import type { VercelProject } from "@/lib/workspaces"
+import {
+  getVercelToken,
+  listVercelProjects,
+  normalizeVercelProject,
+} from "@/lib/vercel-server"
 
 export const dynamic = "force-dynamic"
-
-interface VercelApiProject {
-  id: string
-  name: string
-  alias?: Array<{ domain: string }> | null
-  framework?: string | null
-  updatedAt?: number | null
-  targets?: Record<string, { alias?: string[]; readyState?: string }> | null
-  link?: {
-    type?: string | null
-    org?: string | null
-    repo?: string | null
-    repoId?: number | string | null
-  } | null
-}
-
-interface VercelApiResponse {
-  projects: VercelApiProject[]
-  pagination?: { next?: number | null }
-}
 
 async function isAdmin(uid: string) {
   if (process.env.NEXT_PUBLIC_ADMIN_UID && uid === process.env.NEXT_PUBLIC_ADMIN_UID) {
@@ -61,66 +45,6 @@ async function resolveWorkspaceTeam(uid: string, workspaceId: string) {
     : null
 }
 
-async function fetchVercelProjects({
-  token,
-  teamId,
-  until,
-}: {
-  token: string
-  teamId: string | null
-  until?: number
-}): Promise<VercelApiProject[]> {
-  const params = new URLSearchParams({ limit: "100" })
-  if (teamId) params.set("teamId", teamId)
-  if (until) params.set("until", String(until))
-
-  const response = await fetch(`https://api.vercel.com/v9/projects?${params.toString()}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-  })
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "")
-    const hint =
-      response.status === 401 || response.status === 403
-        ? "Check VERCEL_ACCESS_TOKEN/VERCEL_TOKEN and VERCEL_TEAM_ID."
-        : "Check the Vercel project API response and team scope."
-    throw new Error(`Vercel API ${response.status}: ${body || hint}`)
-  }
-  const payload = (await response.json()) as VercelApiResponse
-  return payload.projects ?? []
-}
-
-function normalizeProject(raw: VercelApiProject, teamId: string | null): VercelProject {
-  const domains = [
-    ...(raw.alias ?? []).map((alias) => alias.domain),
-    ...(raw.targets?.production?.alias ?? []),
-  ].filter((domain): domain is string => typeof domain === "string" && domain.length > 0)
-  const primaryAlias = domains[0] ?? null
-  const repoSlug =
-    raw.link?.org && raw.link?.repo ? `${raw.link.org}/${raw.link.repo}` : null
-  return {
-    id: raw.id,
-    name: raw.name,
-    url: primaryAlias ? `https://${primaryAlias}` : null,
-    framework: raw.framework ?? null,
-    updatedAt: raw.updatedAt ? new Date(raw.updatedAt).toISOString() : null,
-    teamId,
-    deploymentState: raw.targets?.production?.readyState ?? null,
-    domains: Array.from(new Set(domains)),
-    repoSlug,
-    githubRepo: repoSlug,
-    repository: repoSlug
-      ? {
-          fullName: repoSlug,
-          url: `https://github.com/${repoSlug}`,
-        }
-      : null,
-  }
-}
-
 export async function GET(request: NextRequest) {
   try {
     const idToken = getBearerToken(request)
@@ -135,7 +59,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
     }
 
-    const vercelToken = process.env.VERCEL_ACCESS_TOKEN || process.env.VERCEL_TOKEN
+    const vercelToken = getVercelToken()
     if (!vercelToken) {
       return NextResponse.json({
         success: true,
@@ -158,18 +82,16 @@ export async function GET(request: NextRequest) {
       process.env.VERCEL_TEAM_ID ||
       null
 
-    let rawProjects: VercelApiProject[] = []
+    let rawProjects: Awaited<ReturnType<typeof listVercelProjects>> = []
     let warning: string | null = null
     try {
-      rawProjects = await fetchVercelProjects({ token: vercelToken, teamId })
+      rawProjects = await listVercelProjects({ token: vercelToken, teamId })
     } catch (error) {
       warning = error instanceof Error ? error.message : "Unable to load Vercel projects."
       console.warn("Vercel projects unavailable:", warning)
     }
 
-    const projects: VercelProject[] = rawProjects.map((project) =>
-      normalizeProject(project, teamId)
-    )
+    const projects = rawProjects.map((project) => normalizeVercelProject(project, teamId))
 
     const filtered = q
       ? projects.filter(

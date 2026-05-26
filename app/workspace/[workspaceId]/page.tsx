@@ -264,6 +264,16 @@ interface ConnectorMeta {
   warning?: string | null
 }
 
+interface HostingAnalyzeDiagnostics {
+  attachedVercelProjects: number
+  projectDomainsFound: number
+  accountDomainsFound: number
+  matchedDomains: number
+  repoMatchedVercelProjects?: number
+  repoMatchedDomains?: number
+  warnings: string[]
+}
+
 interface GitHubReposResponse {
   repos: GitHubRepo[]
   meta?: ConnectorMeta
@@ -656,6 +666,45 @@ function utilityHealthForProvider(
   }
 }
 
+function hostingEvidenceLabel(link: InfrastructureLink) {
+  if (link.sourceSystem === "vercel-domain") {
+    return link.verified === false ? "Needs verification in Vercel" : "Domain attached through Vercel"
+  }
+  return link.evidenceSnippet ?? "Source-backed hosting record"
+}
+
+function hostingExpirationLabel(link: InfrastructureLink) {
+  if (link.dueDate) {
+    return `Expiration tracked: ${new Date(link.dueDate).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    })}`
+  }
+  if (link.sourceSystem === "vercel-domain") {
+    return "Expiration not available from Vercel"
+  }
+  return null
+}
+
+function domainStatusDescription(link: InfrastructureLink) {
+  if (link.sourceSystem === "vercel-domain") {
+    const verification = link.verified === false ? "Needs verification" : "Verified"
+    const expiration = hostingExpirationLabel(link)
+    return expiration ? `${verification} · ${expiration}` : verification
+  }
+  if (link.status === "renewal_due" || link.status === "unpaid") {
+    return link.dueDate
+      ? `Renewal due ${new Date(link.dueDate).toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        })}`
+      : "Renewal due"
+  }
+  return link.status === "active" ? "Domain active" : infraStatusLabel(link.status)
+}
+
 // ─── InfoTooltip ──────────────────────────────────────────────────────────────
 // Lightweight CSS-only tooltip rendered adjacent to section headers. Keeps the
 // viewport clear of long explanatory prose while making context discoverable.
@@ -860,6 +909,7 @@ export default function WorkspacePage() {
   const [savingConnectors, setSavingConnectors] = useState(false)
   const [githubMeta, setGithubMeta] = useState<ConnectorMeta | null>(null)
   const [vercelMeta, setVercelMeta] = useState<ConnectorMeta | null>(null)
+  const [hostingDiagnostics, setHostingDiagnostics] = useState<HostingAnalyzeDiagnostics | null>(null)
   const [inviteEmail, setInviteEmail] = useState("")
   const [inviteRole, setInviteRole] = useState<
     "owner" | "developer" | "collaborator" | "employee-of-client" | "beam-participant"
@@ -1459,11 +1509,14 @@ export default function WorkspacePage() {
           skipped?: boolean
           records: Array<{ id: string }>
           evidenceCount?: number
+          diagnostics?: HostingAnalyzeDiagnostics
+          warning?: string | null
           message?: string
         }>(user, `/api/workspaces/${params.workspaceId}/infrastructure/analyze`, {
           method: "POST",
           body: JSON.stringify({ force: opts.force ?? false }),
         })
+        setHostingDiagnostics(res.diagnostics ?? null)
 
         // Refresh both infrastructure links and expenses after analysis
         const [linksRes, expensesRes] = await Promise.all([
@@ -1483,7 +1536,7 @@ export default function WorkspacePage() {
           setMessage(
             res.records.length > 0
               ? `Found ${res.records.length} hosting record${res.records.length === 1 ? "" : "s"} from ${res.evidenceCount ?? "available"} evidence item${res.evidenceCount === 1 ? "" : "s"}.`
-              : (res.message ?? "No hosting records found in the available evidence.")
+              : (res.warning || res.message || "No hosting records found in the available evidence.")
           )
         }
       } catch (err) {
@@ -2610,6 +2663,19 @@ export default function WorkspacePage() {
                   {vercelMeta.warning}
                 </div>
               ) : null}
+              {canManageWorkspace && hostingDiagnostics?.warnings.length ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                  <p className="font-semibold">Vercel scan diagnostics</p>
+                  <p className="mt-1">
+                    Attached projects: {hostingDiagnostics.attachedVercelProjects} · Project domains:{" "}
+                    {hostingDiagnostics.projectDomainsFound} · Account domains:{" "}
+                    {hostingDiagnostics.accountDomainsFound} · Matched:{" "}
+                    {hostingDiagnostics.matchedDomains} · Repo matches:{" "}
+                    {hostingDiagnostics.repoMatchedVercelProjects ?? 0}
+                  </p>
+                  <p className="mt-1">{hostingDiagnostics.warnings.join(" ")}</p>
+                </div>
+              ) : null}
 
               {/* ── Section 1: Hosting Status ── */}
               <div className="space-y-3">
@@ -2665,9 +2731,12 @@ export default function WorkspacePage() {
                             ) : null}
                           </p>
                         ) : null}
-                        {link.evidenceSnippet ? (
-                          <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-400">
-                            {link.evidenceSnippet}
+                        <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-400">
+                          {hostingEvidenceLabel(link)}
+                        </p>
+                        {hostingExpirationLabel(link) ? (
+                          <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                            {hostingExpirationLabel(link)}
                           </p>
                         ) : null}
                       </div>
@@ -2779,13 +2848,7 @@ export default function WorkspacePage() {
                                   {dl.domain ?? dl.evidenceSnippet ?? "Domain"}
                                 </p>
                                 <p className="mt-0.5 text-xs text-slate-500">
-                                  {dl.status === "renewal_due" || dl.status === "unpaid"
-                                    ? dl.dueDate
-                                      ? `Renewal due ${new Date(dl.dueDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`
-                                      : "Renewal due"
-                                    : dl.status === "active"
-                                      ? "Domain active"
-                                      : infraStatusLabel(dl.status)}
+                                  {domainStatusDescription(dl)}
                                 </p>
                               </div>
                               <div className="flex items-center gap-3">
