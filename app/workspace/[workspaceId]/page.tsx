@@ -666,6 +666,45 @@ function utilityHealthForProvider(
   }
 }
 
+function dateFromUnknown(value: unknown): Date | null {
+  if (!value) return null
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
+  if (typeof value === "string") {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? null : date
+  }
+  if (typeof value === "object") {
+    if (
+      "seconds" in value &&
+      typeof (value as { seconds: unknown }).seconds === "number"
+    ) {
+      const date = new Date((value as { seconds: number }).seconds * 1000)
+      return Number.isNaN(date.getTime()) ? null : date
+    }
+    if (
+      "toDate" in value &&
+      typeof (value as { toDate: unknown }).toDate === "function"
+    ) {
+      try {
+        const date = (value as { toDate: () => Date }).toDate()
+        return Number.isNaN(date.getTime()) ? null : date
+      } catch {
+        return null
+      }
+    }
+  }
+  return null
+}
+
+function formatSafeDate(
+  value: unknown,
+  options?: Intl.DateTimeFormatOptions,
+  fallback = "N/A"
+) {
+  const date = dateFromUnknown(value)
+  return date ? date.toLocaleDateString("en-US", options) : fallback
+}
+
 function hostingEvidenceLabel(link: InfrastructureLink) {
   if (link.sourceSystem === "vercel-domain") {
     return link.verified === false ? "Needs verification in Vercel" : "Domain attached through Vercel"
@@ -674,12 +713,17 @@ function hostingEvidenceLabel(link: InfrastructureLink) {
 }
 
 function hostingExpirationLabel(link: InfrastructureLink) {
-  if (link.dueDate) {
-    return `Expiration tracked: ${new Date(link.dueDate).toLocaleDateString("en-US", {
+  const dueDate = formatSafeDate(
+    link.dueDate,
+    {
       month: "short",
       day: "numeric",
       year: "numeric",
-    })}`
+    },
+    ""
+  )
+  if (dueDate) {
+    return `Expiration tracked: ${dueDate}`
   }
   if (link.sourceSystem === "vercel-domain") {
     return "Expiration not available from Vercel"
@@ -694,13 +738,16 @@ function domainStatusDescription(link: InfrastructureLink) {
     return expiration ? `${verification} · ${expiration}` : verification
   }
   if (link.status === "renewal_due" || link.status === "unpaid") {
-    return link.dueDate
-      ? `Renewal due ${new Date(link.dueDate).toLocaleDateString("en-US", {
-          month: "long",
-          day: "numeric",
-          year: "numeric",
-        })}`
-      : "Renewal due"
+    const dueDate = formatSafeDate(
+      link.dueDate,
+      {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+      },
+      ""
+    )
+    return dueDate ? `Renewal due ${dueDate}` : "Renewal due"
   }
   return link.status === "active" ? "Domain active" : infraStatusLabel(link.status)
 }
@@ -2723,7 +2770,7 @@ export default function WorkspacePage() {
                             {link.dueDate ? (
                               <span className="ml-1 text-xs font-normal text-slate-500">
                                 due{" "}
-                                {new Date(link.dueDate).toLocaleDateString("en-US", {
+                                {formatSafeDate(link.dueDate, {
                                   month: "short",
                                   day: "numeric",
                                 })}
@@ -2774,7 +2821,7 @@ export default function WorkspacePage() {
                             <p className="mt-0.5 text-xs text-slate-500">
                               {expense.description}
                               {expense.dueDate
-                                ? ` · Due ${new Date(expense.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+                                ? ` · Due ${formatSafeDate(expense.dueDate, { month: "short", day: "numeric", year: "numeric" })}`
                                 : ""}
                             </p>
                           </div>

@@ -78,6 +78,16 @@ function serializeTimestamp(value: unknown): string | null {
   if (
     value !== null &&
     typeof value === "object" &&
+    "seconds" in value &&
+    typeof (value as { seconds: unknown }).seconds === "number"
+  ) {
+    const seconds = (value as { seconds: number }).seconds
+    const date = new Date(seconds * 1000)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }
+  if (
+    value !== null &&
+    typeof value === "object" &&
     "toDate" in value &&
     typeof (value as { toDate: unknown }).toDate === "function"
   ) {

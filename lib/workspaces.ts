@@ -239,6 +239,33 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null
 }
 
+function serializeTimestamp(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim()
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString()
+  if (
+    value &&
+    typeof value === "object" &&
+    "seconds" in value &&
+    typeof (value as { seconds: unknown }).seconds === "number"
+  ) {
+    const date = new Date((value as { seconds: number }).seconds * 1000)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }
+  if (
+    value &&
+    typeof value === "object" &&
+    "toDate" in value &&
+    typeof (value as { toDate: unknown }).toDate === "function"
+  ) {
+    try {
+      return (value as { toDate: () => Date }).toDate().toISOString()
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
@@ -268,7 +295,7 @@ function normalizeHosting(data: unknown): WorkspaceHostingConfig {
           registrar: entry.registrar === "namecheap" ? "namecheap" : "other",
           domain: readString(entry.domain) ?? "",
           nameservers: readStringArray(entry.nameservers),
-          renewalDate: readString(entry.renewalDate),
+          renewalDate: serializeTimestamp(entry.renewalDate),
           accountLabel: readString(entry.accountLabel),
           notes: readString(entry.notes),
         } satisfies DomainRegistrarRecord

@@ -31,6 +31,15 @@ function asNumber(value: unknown) {
 function asTimestampString(value: unknown): string | null {
   if (typeof value === "string") return value
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString()
+  if (
+    value &&
+    typeof value === "object" &&
+    "seconds" in value &&
+    typeof (value as { seconds: unknown }).seconds === "number"
+  ) {
+    const date = new Date((value as { seconds: number }).seconds * 1000)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }
   if (value && typeof value === "object" && "toDate" in value) {
     try {
       return (value as { toDate: () => Date }).toDate().toISOString()
