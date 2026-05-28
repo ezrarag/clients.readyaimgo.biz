@@ -135,6 +135,10 @@ interface WorkspaceExpense {
     | "API Consumption"
     | "Compute Allocation"
   dueDate: string | null
+  domain: string | null
+  evidenceSnippet: string | null
+  sourceSystem: string | null
+  sourceRef: string | null
   daysOverdue: number
   criticalSystemFlag: boolean
   vendor: string | null
@@ -464,7 +468,7 @@ function projectCommitLabel(project: WorkspaceProject) {
 }
 
 const ASSET_PROJECT_TYPES: Array<{ value: AssetProjectType; label: string }> = [
-  { value: "webdev", label: "Web Development" },
+  { value: "webdev", label: "Nexus" },
   { value: "participant", label: "Participant Cohort" },
   { value: "transportation", label: "Transportation Asset" },
   { value: "real-estate", label: "Real Estate Portfolio" },
@@ -752,6 +756,112 @@ function domainStatusDescription(link: InfrastructureLink) {
   return link.status === "active" ? "Domain active" : infraStatusLabel(link.status)
 }
 
+function normalizeDomainValue(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return null
+  const host = value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split(/[/?#]/)[0]
+  return host.includes(".") ? host : null
+}
+
+function expenseSearchText(expense: WorkspaceExpense) {
+  return [
+    expense.domain,
+    expense.source,
+    expense.description,
+    expense.evidenceSnippet,
+    expense.vendor,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+}
+
+function expenseMatchesLink(expense: WorkspaceExpense, link: InfrastructureLink) {
+  const linkDomain = normalizeDomainValue(link.domain)
+  const expenseDomain = normalizeDomainValue(expense.domain)
+  if (linkDomain && expenseDomain) {
+    return linkDomain === expenseDomain || linkDomain.endsWith(`.${expenseDomain}`) || expenseDomain.endsWith(`.${linkDomain}`)
+  }
+  if (linkDomain) return expenseSearchText(expense).includes(linkDomain)
+  return false
+}
+
+function findExpenseForInfrastructureLink(
+  link: InfrastructureLink,
+  expenses: WorkspaceExpense[]
+) {
+  const matching = expenses.filter((expense) => expenseMatchesLink(expense, link))
+  return (
+    matching.find((expense) => expense.status === "unpaid" && expense.criticalSystemFlag) ??
+    matching.find((expense) => expense.status === "unpaid") ??
+    matching[0] ??
+    null
+  )
+}
+
+function infrastructureLinkScore(link: InfrastructureLink, expense: WorkspaceExpense | null) {
+  let score = 0
+  if (expense?.amount) score += 100
+  if (link.amount) score += 80
+  if (link.dueDate || expense?.dueDate) score += 40
+  if (link.sourceSystem === "vercel-domain") score += 90
+  if (link.verified) score += 30
+  score += link.confidence
+  return score
+}
+
+function isRenderableInfrastructureLink(link: InfrastructureLink) {
+  if (link.domain || link.amount || link.dueDate) return true
+  return link.type !== "domain" && link.type !== "invoice"
+}
+
+function buildHostingStatusCards(
+  links: InfrastructureLink[],
+  expenses: WorkspaceExpense[]
+) {
+  const cards = new Map<
+    string,
+    {
+      link: InfrastructureLink
+      expense: WorkspaceExpense | null
+      status: InfrastructureLink["status"]
+    }
+  >()
+
+  for (const link of links) {
+    if (!isRenderableInfrastructureLink(link)) continue
+    const expense = findExpenseForInfrastructureLink(link, expenses)
+    const domainKey = normalizeDomainValue(link.domain)
+    const key = domainKey
+      ? domainKey
+      : `${link.provider}:${link.type}:${link.sourceSystem}:${link.id}`
+    const status =
+      expense?.status === "unpaid"
+        ? expense.criticalSystemFlag
+          ? "unpaid"
+          : "renewal_due"
+        : link.status
+    const next = { link, expense, status }
+    const current = cards.get(key)
+    if (!current) {
+      cards.set(key, next)
+      continue
+    }
+    if (
+      infrastructureLinkScore(next.link, next.expense) >
+      infrastructureLinkScore(current.link, current.expense)
+    ) {
+      cards.set(key, next)
+    }
+  }
+
+  return [...cards.values()]
+}
+
 // ─── InfoTooltip ──────────────────────────────────────────────────────────────
 // Lightweight CSS-only tooltip rendered adjacent to section headers. Keeps the
 // viewport clear of long explanatory prose while making context discoverable.
@@ -935,7 +1045,10 @@ export default function WorkspacePage() {
   const [authorizingExpenseId, setAuthorizingExpenseId] = useState<string | null>(null)
   const [analyzingLedger, setAnalyzingLedger] = useState(false)
   const [analyzingHosting, setAnalyzingHosting] = useState(false)
+  const [savingBillingEvidence, setSavingBillingEvidence] = useState(false)
   const [infrastructureLinks, setInfrastructureLinks] = useState<InfrastructureLink[]>([])
+  const [billingEvidenceOpen, setBillingEvidenceOpen] = useState(false)
+  const [billingEvidenceText, setBillingEvidenceText] = useState("")
   const [domainQuery, setDomainQuery] = useState("")
   const [retainerSlide, setRetainerSlide] = useState(0)
   const autoLedgerRefreshRef = useRef<Set<string>>(new Set())
@@ -957,6 +1070,10 @@ export default function WorkspacePage() {
   const [githubMeta, setGithubMeta] = useState<ConnectorMeta | null>(null)
   const [vercelMeta, setVercelMeta] = useState<ConnectorMeta | null>(null)
   const [hostingDiagnostics, setHostingDiagnostics] = useState<HostingAnalyzeDiagnostics | null>(null)
+  const hostingStatusCards = useMemo(
+    () => buildHostingStatusCards(infrastructureLinks, expenses),
+    [expenses, infrastructureLinks]
+  )
   const [inviteEmail, setInviteEmail] = useState("")
   const [inviteRole, setInviteRole] = useState<
     "owner" | "developer" | "collaborator" | "employee-of-client" | "beam-participant"
@@ -1596,6 +1713,47 @@ export default function WorkspacePage() {
     },
     [analyzingHosting, params.workspaceId, user]
   )
+
+  const saveBillingEvidence = useCallback(async () => {
+    if (!user || !canManageWorkspace) return
+    const evidenceText = billingEvidenceText.trim()
+    if (!evidenceText) {
+      setError("Paste a Zoho, Namecheap, or renewal email before saving billing evidence.")
+      return
+    }
+
+    setSavingBillingEvidence(true)
+    setError(null)
+    setMessage(null)
+    try {
+      await apiFetch<{ success: boolean; evidenceId: string }>(
+        user,
+        `/api/workspaces/${params.workspaceId}/hosting-evidence`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject: "Manual hosting billing evidence",
+            evidenceText,
+          }),
+        }
+      )
+      setBillingEvidenceText("")
+      setBillingEvidenceOpen(false)
+      setMessage("Billing evidence saved. Refreshing hosting records now.")
+      await handleAnalyzeHosting({ force: true, silent: true })
+      setMessage("Billing evidence analyzed. Matching expenses now appear on hosting cards.")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save billing evidence.")
+    } finally {
+      setSavingBillingEvidence(false)
+    }
+  }, [
+    billingEvidenceText,
+    canManageWorkspace,
+    handleAnalyzeHosting,
+    params.workspaceId,
+    user,
+  ])
 
   // Auto-analyze when the Hosting tab opens, once per session, if no links exist yet.
   useEffect(() => {
@@ -2724,6 +2882,55 @@ export default function WorkspacePage() {
                 </div>
               ) : null}
 
+              {canManageWorkspace ? (
+                <div className="rounded-2xl border border-border bg-slate-50/70 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Billing Evidence</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Paste a Zoho, Namecheap, or renewal email to source the due date and amount for this workspace.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setBillingEvidenceOpen((value) => !value)}
+                    >
+                      {billingEvidenceOpen ? "Hide Evidence" : "Add Billing Evidence"}
+                    </Button>
+                  </div>
+                  {billingEvidenceOpen ? (
+                    <div className="mt-4 space-y-3">
+                      <Textarea
+                        value={billingEvidenceText}
+                        onChange={(event) => setBillingEvidenceText(event.target.value)}
+                        placeholder="Paste the invoice or renewal email here. Include the domain, amount, and due or renewal date when available."
+                        className="min-h-[140px] bg-white"
+                      />
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-xs text-slate-500">
+                          Saved as source-backed correspondence, then analyzed against the attached Vercel domain.
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => void saveBillingEvidence()}
+                          disabled={savingBillingEvidence || analyzingHosting || !billingEvidenceText.trim()}
+                        >
+                          {savingBillingEvidence || analyzingHosting ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Sparkles className="mr-2 h-4 w-4" />
+                          )}
+                          Save & Analyze
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               {/* ── Section 1: Hosting Status ── */}
               <div className="space-y-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -2731,12 +2938,12 @@ export default function WorkspacePage() {
                 </p>
 
                 {/* Evidence-driven provider cards */}
-                {analyzingHosting && infrastructureLinks.length === 0 ? (
+                {analyzingHosting && hostingStatusCards.length === 0 ? (
                   <div className="flex items-center gap-3 rounded-2xl border border-border bg-slate-50/70 px-4 py-5">
                     <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
                     <p className="text-xs text-slate-500">Scanning hosting records…</p>
                   </div>
-                ) : infrastructureLinks.length === 0 ? (
+                ) : hostingStatusCards.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-border bg-slate-50/70 px-6 py-8 text-center">
                     <Globe2 className="mx-auto mb-3 h-7 w-7 text-slate-300" />
                     <p className="text-sm font-medium text-slate-600">No hosting records are attached yet.</p>
@@ -2746,10 +2953,17 @@ export default function WorkspacePage() {
                   </div>
                 ) : (
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {infrastructureLinks.map((link) => (
+                    {hostingStatusCards.map(({ link, expense, status }) => (
                       <div
                         key={link.id}
-                        className="rounded-2xl border border-border bg-white/80 px-4 py-3"
+                        className={[
+                          "rounded-2xl border bg-white/80 px-4 py-3",
+                          expense?.criticalSystemFlag
+                            ? "border-rose-300 bg-rose-50/60"
+                            : expense?.status === "unpaid"
+                              ? "border-amber-200 bg-amber-50/50"
+                              : "border-border",
+                        ].join(" ")}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
@@ -2760,17 +2974,17 @@ export default function WorkspacePage() {
                               <p className="mt-0.5 truncate text-xs text-slate-500">{link.domain}</p>
                             ) : null}
                           </div>
-                          <Badge variant={infraStatusVariant(link.status)} className="shrink-0">
-                            {infraStatusLabel(link.status)}
+                          <Badge variant={infraStatusVariant(status)} className="shrink-0">
+                            {infraStatusLabel(status)}
                           </Badge>
                         </div>
-                        {link.amount ? (
+                        {expense?.amount || link.amount ? (
                           <p className="mt-2 text-sm font-semibold text-slate-900">
-                            {currencyFormatter.format(link.amount)}
-                            {link.dueDate ? (
+                            {currencyFormatter.format(expense?.amount ?? link.amount ?? 0)}
+                            {expense?.dueDate || link.dueDate ? (
                               <span className="ml-1 text-xs font-normal text-slate-500">
                                 due{" "}
-                                {formatSafeDate(link.dueDate, {
+                                {formatSafeDate(expense?.dueDate ?? link.dueDate, {
                                   month: "short",
                                   day: "numeric",
                                 })}
@@ -2779,9 +2993,13 @@ export default function WorkspacePage() {
                           </p>
                         ) : null}
                         <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-400">
-                          {hostingEvidenceLabel(link)}
+                          {expense?.evidenceSnippet ?? hostingEvidenceLabel(link)}
                         </p>
-                        {hostingExpirationLabel(link) ? (
+                        {expense?.daysOverdue && expense.daysOverdue > 0 ? (
+                          <p className="mt-1 text-[11px] font-semibold leading-4 text-rose-600">
+                            Overdue by {expense.daysOverdue} day{expense.daysOverdue === 1 ? "" : "s"}
+                          </p>
+                        ) : hostingExpirationLabel(link) ? (
                           <p className="mt-1 text-[11px] leading-4 text-slate-500">
                             {hostingExpirationLabel(link)}
                           </p>
@@ -3547,7 +3765,9 @@ export default function WorkspacePage() {
                             ? "Valuation"
                             : retainerSlide === 1
                               ? "Contract Alignment"
-                              : "Hosting Implications"}
+                              : retainerSlide === 2
+                                ? "Hosting Implications"
+                                : "Build Cost Comparison"}
                         </p>
                         <div className="flex items-center gap-0.5">
                           <button
@@ -3560,12 +3780,12 @@ export default function WorkspacePage() {
                             <ChevronLeft className="h-4 w-4" />
                           </button>
                           <span className="min-w-[28px] text-center text-[10px] font-semibold text-amber-600">
-                            {retainerSlide + 1}/3
+                            {retainerSlide + 1}/4
                           </span>
                           <button
                             type="button"
-                            onClick={() => setRetainerSlide((s) => Math.min(2, s + 1))}
-                            disabled={retainerSlide === 2}
+                            onClick={() => setRetainerSlide((s) => Math.min(3, s + 1))}
+                            disabled={retainerSlide === 3}
                             className="flex h-6 w-6 items-center justify-center rounded-full text-amber-600 transition hover:bg-amber-100 disabled:opacity-30"
                             aria-label="Next"
                           >
@@ -3708,6 +3928,63 @@ export default function WorkspacePage() {
                                   .filter((e) => e.status === "unpaid")
                                   .reduce((sum, e) => sum + e.amount, 0)
                               )}
+                            </p>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {/* Slide 3 — Build Cost Comparison */}
+                      {retainerSlide === 3 ? (
+                        <div className="mt-4 space-y-3">
+                          {[
+                            {
+                              name: "Squarespace",
+                              range: "$23–65 / mo",
+                              scope: "Partial",
+                              notes: "Templates only. No custom logic, no API integrations, no ownership.",
+                              variant: "secondary" as const,
+                            },
+                            {
+                              name: "WordPress",
+                              range: "$25–200+ / mo",
+                              scope: "Limited",
+                              notes: "Plugin-dependent. Maintenance overhead, security risk, no product roadmap.",
+                              variant: "secondary" as const,
+                            },
+                            {
+                              name: "ReadyAimGo",
+                              range: "$50 / mo",
+                              scope: "Full scope",
+                              notes: "Custom-built, client-owned, hosted, maintained, and continuously delivered.",
+                              variant: "success" as const,
+                            },
+                          ].map((row) => (
+                            <div key={row.name} className="rounded-xl bg-white/70 px-3 py-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-xs font-semibold leading-5 text-slate-800">
+                                  {row.name}
+                                </p>
+                                <div className="flex shrink-0 items-center gap-1.5">
+                                  <Badge variant={row.variant} className="text-[10px]">
+                                    {row.scope}
+                                  </Badge>
+                                  <span className="text-[11px] font-semibold text-slate-700">
+                                    {row.range}
+                                  </span>
+                                </div>
+                              </div>
+                              <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+                                {row.notes}
+                              </p>
+                            </div>
+                          ))}
+                          <div className="border-t border-amber-200/70 pt-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                              Your retainer covers
+                            </p>
+                            <p className="mt-1 text-[11px] leading-5 text-slate-600">
+                              Custom development, hosting, domain management, and continuous delivery
+                              — at a fraction of what comparable agency work costs.
                             </p>
                           </div>
                         </div>
