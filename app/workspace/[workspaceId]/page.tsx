@@ -211,6 +211,13 @@ interface WorkspaceProject {
   fleetIds?: string[]
   mileageTotal?: number
   propertyLocations?: Array<{ label?: string; latitude?: number; longitude?: number }>
+  motionCreditsUsed?: number
+  motionCreditsTotal?: number
+  assignedDriverName?: string
+  assignedVehicle?: string
+  transitZone?: string
+  transitType?: string
+  subscriptionStartDate?: string
   updatedAt?: string
   createdAt?: string
 }
@@ -470,7 +477,7 @@ function projectCommitLabel(project: WorkspaceProject) {
 const ASSET_PROJECT_TYPES: Array<{ value: AssetProjectType; label: string }> = [
   { value: "webdev", label: "Nexus" },
   { value: "participant", label: "Participant Cohort" },
-  { value: "transportation", label: "Transportation Asset" },
+  { value: "transportation", label: "Motion Network" },
   { value: "real-estate", label: "Real Estate Portfolio" },
 ]
 
@@ -1132,6 +1139,19 @@ export default function WorkspacePage() {
     () => consolidateProjectCards(childProjects),
     [childProjects]
   )
+  const dominantType = useMemo((): AssetProjectType => {
+    const counts: Record<string, number> = {}
+    for (const p of projectCards) {
+      const t =
+        projectTypeOverrides[p.id] ??
+        parseAssetProjectType(p.assetProjectType ?? p.projectType)
+      counts[t] = (counts[t] ?? 0) + 1
+    }
+    return (
+      (Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] as AssetProjectType | undefined) ??
+      "webdev"
+    )
+  }, [projectCards, projectTypeOverrides])
   const directoryProject = useMemo(
     () =>
       directorySelection
@@ -2414,23 +2434,99 @@ export default function WorkspacePage() {
                           </div>
                         ) : null}
 
-                        {assetType === "transportation" ? (
-                          <div className="mt-4 rounded-2xl border border-border bg-slate-50/70 p-3">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                              Fleet Tracking Log
-                            </p>
-                            <div className="mt-3 grid gap-2">
-                              {fleetIdsForProject(project).map((fleetId, index) => (
-                                <div key={fleetId} className="rounded-xl bg-white px-3 py-2">
-                                  <p className="text-xs font-semibold text-slate-800">{fleetId}</p>
-                                  <p className="mt-1 text-xs text-slate-500">
-                                    Mileage tracked: {((project.mileageTotal ?? 0) + index * 125).toLocaleString("en-US")} mi
-                                  </p>
+                        {assetType === "transportation" ? (() => {
+                          // ── Motion Credits ────────────────────────────────
+                          const creditsTotal = project.motionCreditsTotal ?? 4
+                          const creditsUsed = project.motionCreditsUsed ?? 0
+                          const creditsRemaining = Math.max(0, creditsTotal - creditsUsed)
+
+                          // ── 60-day launch countdown ───────────────────────
+                          const anchorRaw = project.subscriptionStartDate ?? project.createdAt
+                          const anchor = anchorRaw ? new Date(anchorRaw) : null
+                          const launchDate = anchor ? new Date(anchor.getTime() + 60 * 86400000) : null
+                          const daysUntilLaunch = launchDate
+                            ? Math.ceil((launchDate.getTime() - Date.now()) / 86400000)
+                            : null
+                          const networkActive = daysUntilLaunch !== null && daysUntilLaunch <= 0
+
+                          // ── Route detail rows ─────────────────────────────
+                          const firstFleetId = fleetIdsForProject(project)[0] ?? null
+                          const routeRows: Array<{ label: string; value: string }> = [
+                            { label: "Zone", value: project.transitZone ?? "Intake pending" },
+                            { label: "Transit Type", value: project.transitType ?? "Profile pending" },
+                            { label: "Vehicle", value: project.assignedVehicle ?? "Not yet assigned" },
+                            { label: "Driver", value: project.assignedDriverName ?? "Assignment pending" },
+                            { label: "Fleet ID", value: firstFleetId ?? "Unregistered" },
+                            {
+                              label: "Mileage",
+                              value: project.mileageTotal != null
+                                ? `${project.mileageTotal.toLocaleString("en-US")} mi tracked`
+                                : "No data yet",
+                            },
+                          ]
+
+                          return (
+                            <div className="mt-4 space-y-3">
+                              {/* Motion Credits strip */}
+                              <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-400">
+                                  Motion Credits
+                                </p>
+                                <div className="mt-2 flex items-center gap-2">
+                                  {Array.from({ length: creditsTotal }).map((_, i) => {
+                                    const available = i >= creditsUsed
+                                    return (
+                                      <span
+                                        key={i}
+                                        className={`inline-block h-4 w-4 rounded-full border-2 transition-colors ${
+                                          available
+                                            ? "border-blue-500 bg-blue-500"
+                                            : "border-slate-300 bg-slate-200 opacity-40"
+                                        }`}
+                                      />
+                                    )
+                                  })}
+                                  <span className="ml-1 text-[11px] text-slate-500">
+                                    {creditsRemaining} credit{creditsRemaining !== 1 ? "s" : ""} remaining
+                                    {" · "}1 credit = round-trip up to 15 mi
+                                  </span>
                                 </div>
-                              ))}
+                              </div>
+
+                              {/* 60-day launch countdown */}
+                              {launchDate !== null && (
+                                <div className="flex items-center gap-2 rounded-xl border border-border bg-white px-3 py-2">
+                                  {networkActive ? (
+                                    <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700">
+                                      ● Network Active
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
+                                      {daysUntilLaunch} day{daysUntilLaunch !== 1 ? "s" : ""} until network activates
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Route details grid */}
+                              <div className="rounded-2xl border border-border bg-slate-50/70 p-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                                  Route Details
+                                </p>
+                                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5">
+                                  {routeRows.map((row) => (
+                                    <div key={row.label}>
+                                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                                        {row.label}
+                                      </p>
+                                      <p className="text-xs text-slate-700">{row.value}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        ) : null}
+                          )
+                        })() : null}
 
                         {assetType === "real-estate" ? (
                           <div className="mt-4 rounded-2xl border border-border bg-slate-50/70 p-3">
@@ -3767,7 +3863,11 @@ export default function WorkspacePage() {
                               ? "Contract Alignment"
                               : retainerSlide === 2
                                 ? "Hosting Implications"
-                                : "Build Cost Comparison"}
+                                : dominantType === "transportation"
+                                  ? "Mobility Cost Comparison"
+                                  : dominantType === "real-estate"
+                                    ? "Real Estate Comparison"
+                                    : "Build Cost Comparison"}
                         </p>
                         <div className="flex items-center gap-0.5">
                           <button
@@ -3933,61 +4033,144 @@ export default function WorkspacePage() {
                         </div>
                       ) : null}
 
-                      {/* Slide 3 — Build Cost Comparison */}
+                      {/* Slide 3 — Service-Aware Comparison */}
                       {retainerSlide === 3 ? (
-                        <div className="mt-4 space-y-3">
-                          {[
-                            {
-                              name: "Squarespace",
-                              range: "$23–65 / mo",
-                              scope: "Partial",
-                              notes: "Templates only. No custom logic, no API integrations, no ownership.",
-                              variant: "secondary" as const,
-                            },
-                            {
-                              name: "WordPress",
-                              range: "$25–200+ / mo",
-                              scope: "Limited",
-                              notes: "Plugin-dependent. Maintenance overhead, security risk, no product roadmap.",
-                              variant: "secondary" as const,
-                            },
-                            {
-                              name: "ReadyAimGo",
-                              range: "$50 / mo",
-                              scope: "Full scope",
-                              notes: "Custom-built, client-owned, hosted, maintained, and continuously delivered.",
-                              variant: "success" as const,
-                            },
-                          ].map((row) => (
-                            <div key={row.name} className="rounded-xl bg-white/70 px-3 py-2">
-                              <div className="flex items-start justify-between gap-2">
-                                <p className="text-xs font-semibold leading-5 text-slate-800">
-                                  {row.name}
-                                </p>
-                                <div className="flex shrink-0 items-center gap-1.5">
-                                  <Badge variant={row.variant} className="text-[10px]">
-                                    {row.scope}
-                                  </Badge>
-                                  <span className="text-[11px] font-semibold text-slate-700">
-                                    {row.range}
-                                  </span>
+                        dominantType === "transportation" ? (
+                          /* Mobility Cost Comparison */
+                          <div className="mt-4 space-y-3">
+                            {[
+                              {
+                                name: "Uber for Business",
+                                range: "$300–800 / mo",
+                                scope: "No cargo/scheduling",
+                                notes: "Ride-hailing only. No cargo, no scheduling, no fleet ownership.",
+                                variant: "secondary" as const,
+                              },
+                              {
+                                name: "DoorDash for Business",
+                                range: "$200–500 / mo",
+                                scope: "Delivery only",
+                                notes: "Per-order fees add up. No rides or scheduling integration.",
+                                variant: "secondary" as const,
+                              },
+                              {
+                                name: "Private Chauffeur",
+                                range: "$1,500–3,000 / mo",
+                                scope: "Single client",
+                                notes: "Single-client service. Not scalable, no multi-stop routing.",
+                                variant: "secondary" as const,
+                              },
+                              {
+                                name: "ReadyAimGo Motion",
+                                range: "$100 / mo",
+                                scope: "Full scope",
+                                notes: "Rides + delivery + scheduling. Fleet-tracked, dispatch-ready, continuously maintained.",
+                                variant: "success" as const,
+                              },
+                            ].map((row) => (
+                              <div key={row.name} className="rounded-xl bg-white/70 px-3 py-2">
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="text-xs font-semibold leading-5 text-slate-800">
+                                    {row.name}
+                                  </p>
+                                  <div className="flex shrink-0 items-center gap-1.5">
+                                    <Badge variant={row.variant} className="text-[10px]">
+                                      {row.scope}
+                                    </Badge>
+                                    <span className="text-[11px] font-semibold text-slate-700">
+                                      {row.range}
+                                    </span>
+                                  </div>
                                 </div>
+                                <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+                                  {row.notes}
+                                </p>
                               </div>
-                              <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
-                                {row.notes}
+                            ))}
+                            <div className="border-t border-blue-200/70 pt-3">
+                              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">
+                                Your retainer covers
+                              </p>
+                              <p className="mt-1 text-[11px] leading-5 text-slate-600">
+                                Rides, cargo delivery, scheduling, and fleet tracking — at a
+                                fraction of what comparable mobility platforms charge per order.
                               </p>
                             </div>
-                          ))}
-                          <div className="border-t border-amber-200/70 pt-3">
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
-                              Your retainer covers
-                            </p>
-                            <p className="mt-1 text-[11px] leading-5 text-slate-600">
-                              Custom development, hosting, domain management, and continuous delivery
-                              — at a fraction of what comparable agency work costs.
-                            </p>
                           </div>
-                        </div>
+                        ) : dominantType === "real-estate" ? (
+                          /* Real Estate Comparison — placeholder */
+                          <div className="mt-4 space-y-3">
+                            <div className="rounded-xl bg-white/70 px-3 py-3">
+                              <p className="text-xs font-medium leading-5 text-slate-500">
+                                Real estate portfolio comparison — coming soon.
+                              </p>
+                            </div>
+                            <div className="border-t border-amber-200/70 pt-3">
+                              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                                Your retainer covers
+                              </p>
+                              <p className="mt-1 text-[11px] leading-5 text-slate-600">
+                                Property tracking, location mapping, and portfolio management,
+                                continuously delivered.
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          /* Webdev / default — Build Cost Comparison */
+                          <div className="mt-4 space-y-3">
+                            {[
+                              {
+                                name: "Squarespace",
+                                range: "$23–65 / mo",
+                                scope: "Partial",
+                                notes: "Templates only. No custom logic, no API integrations, no ownership.",
+                                variant: "secondary" as const,
+                              },
+                              {
+                                name: "WordPress",
+                                range: "$25–200+ / mo",
+                                scope: "Limited",
+                                notes: "Plugin-dependent. Maintenance overhead, security risk, no product roadmap.",
+                                variant: "secondary" as const,
+                              },
+                              {
+                                name: "ReadyAimGo Nexus",
+                                range: "$50 / mo",
+                                scope: "Full scope",
+                                notes: "Custom-built, client-owned, hosted, maintained, and continuously delivered.",
+                                variant: "success" as const,
+                              },
+                            ].map((row) => (
+                              <div key={row.name} className="rounded-xl bg-white/70 px-3 py-2">
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="text-xs font-semibold leading-5 text-slate-800">
+                                    {row.name}
+                                  </p>
+                                  <div className="flex shrink-0 items-center gap-1.5">
+                                    <Badge variant={row.variant} className="text-[10px]">
+                                      {row.scope}
+                                    </Badge>
+                                    <span className="text-[11px] font-semibold text-slate-700">
+                                      {row.range}
+                                    </span>
+                                  </div>
+                                </div>
+                                <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+                                  {row.notes}
+                                </p>
+                              </div>
+                            ))}
+                            <div className="border-t border-amber-200/70 pt-3">
+                              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                                Your retainer covers
+                              </p>
+                              <p className="mt-1 text-[11px] leading-5 text-slate-600">
+                                Custom development, hosting, domain management, and continuous
+                                delivery — at a fraction of what comparable agency work costs.
+                              </p>
+                            </div>
+                          </div>
+                        )
                       ) : null}
                     </div>
                     {/* Stripe Receipts */}

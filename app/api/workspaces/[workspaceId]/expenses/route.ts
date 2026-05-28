@@ -22,7 +22,7 @@ type BillingCycleType = (typeof BILLING_CYCLE_TYPES)[number]
 function asNumber(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) return value
   if (typeof value === "string") {
-    const parsed = Number(value)
+    const parsed = Number(value.replace(/[$,]/g, ""))
     if (Number.isFinite(parsed)) return parsed
   }
   return 0
@@ -125,6 +125,24 @@ function normalizeExpense(id: string, data: Record<string, unknown>) {
     contractAppendageReady: Boolean(data.contractAppendageReady ?? true),
     createdAt: asTimestampString(data.createdAt),
     dueDate,
+    domain:
+      typeof data.domain === "string" && data.domain.trim()
+        ? data.domain.trim().toLowerCase()
+        : null,
+    evidenceSnippet:
+      typeof data.evidenceSnippet === "string" && data.evidenceSnippet.trim()
+        ? data.evidenceSnippet.trim()
+        : null,
+    sourceSystem:
+      typeof data.sourceSystem === "string" && data.sourceSystem.trim()
+        ? data.sourceSystem.trim()
+        : null,
+    sourceRef:
+      typeof data.sourceRef === "string" && data.sourceRef.trim()
+        ? data.sourceRef.trim()
+        : typeof data.sourceEmailId === "string" && data.sourceEmailId.trim()
+          ? data.sourceEmailId.trim()
+          : null,
     paidAt: asTimestampString(data.paidAt),
   }
 

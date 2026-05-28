@@ -279,9 +279,9 @@ async function collectEmailEvidence(
       const subject = compact(d.subject ?? d.title, 200)
       const from = compact(d.from ?? d.sender, 100)
       const body =
-        compact(d.snippet, 300) ||
-        compact(d.text, 500) ||
-        compact(d.body, 500)
+        compact(d.text, 4000) ||
+        compact(d.body, 4000) ||
+        compact(d.snippet, 1200)
       const raw = [subject, from, body].join(" ").toLowerCase()
 
       const relevant =
@@ -289,12 +289,17 @@ async function collectEmailEvidence(
         raw.includes("namecheap") ||
         raw.includes("domain") ||
         raw.includes("renewal") ||
+        raw.includes("expiration") ||
+        raw.includes("expires") ||
+        raw.includes("due") ||
         raw.includes("dns") ||
         raw.includes("mx record") ||
         raw.includes("business email") ||
         raw.includes("twilio") ||
         raw.includes("vercel") ||
         raw.includes("invoice") ||
+        raw.includes("receipt") ||
+        raw.includes("payment") ||
         raw.includes("billing")
 
       if (!relevant) return null
@@ -814,6 +819,115 @@ const VALID_STATUSES: InfrastructureStatus[] = [
   "unknown",
 ]
 
+function billingCycleForRecord(record: Record<string, unknown>) {
+  const provider = readString(record.provider)?.toLowerCase() ?? ""
+  const type = readString(record.type)?.toLowerCase() ?? ""
+  const text = [provider, type, readString(record.evidenceSnippet)?.toLowerCase()]
+    .filter(Boolean)
+    .join(" ")
+
+  if (provider.includes("zoho") || type.includes("mail") || text.includes("email")) {
+    return "Business Email Tier"
+  }
+  if (provider.includes("twilio") || type.includes("communication") || text.includes("sms")) {
+    return "API Consumption"
+  }
+  if (provider.includes("vercel") || type.includes("hosting") || text.includes("compute")) {
+    return "Compute Allocation"
+  }
+  return "Domain Renewal"
+}
+
+function serviceProviderForRecord(record: Record<string, unknown>) {
+  const provider = readString(record.provider)
+  return VALID_PROVIDERS.includes(provider as InfrastructureProvider)
+    ? (provider as InfrastructureProvider)
+    : "Other"
+}
+
+function shouldCreateExpense(record: Record<string, unknown>) {
+  const amount = readNumber(record.amount)
+  if (!amount || amount <= 0) return false
+  const status = readString(record.status)?.toLowerCase()
+  return status === "unpaid" || status === "renewal_due" || status === "pending" || status === "unknown"
+}
+
+function expenseStatusForRecord(record: Record<string, unknown>) {
+  return readString(record.status) === "paid" ? "paid" : "unpaid"
+}
+
+function parseDatePhrase(value: string) {
+  const match = value.match(
+    /\b(?:due for renewal on|renewal on|due on|expires on|expiry date|expiration date)\s+([A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4})/i
+  )
+  if (!match?.[1]) return null
+  const date = new Date(match[1].replace(/([A-Z][a-z]+)\./, "$1"))
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
+function parseRenewalBillingEvidence(evidence: EvidenceItem[]) {
+  const records: Record<string, unknown>[] = []
+  const domainPattern = /((?:xn--)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)/i
+  const amountPattern = /\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)/
+
+  for (const item of evidence) {
+    const text = item.text.replace(/\\n/g, "\n")
+    const lower = text.toLowerCase()
+    if (
+      !lower.includes("renew") &&
+      !lower.includes("expire") &&
+      !lower.includes("invoice") &&
+      !lower.includes("payment")
+    ) {
+      continue
+    }
+
+    const dueDate = parseDatePhrase(text)
+    const provider = lower.includes("zoho") ? "Zoho" : "Namecheap"
+
+    for (const rawLine of text.split(/\n| {2,}|\t/)) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const domain = cleanDomain(line.match(domainPattern)?.[1])
+      const amount = readNumber(line.match(amountPattern)?.[1])
+      if (!domain || !amount || amount <= 0) continue
+
+      records.push({
+        provider,
+        type: "domain",
+        domain,
+        status: "renewal_due",
+        amount,
+        dueDate,
+        sourceSystem: item.sourceSystem,
+        sourceRef: item.id,
+        evidenceSnippet: line.slice(0, 240),
+        confidence: 0.96,
+        clientVisible: true,
+      })
+    }
+  }
+
+  return records
+}
+
+function dedupeInfrastructureRecords(records: Record<string, unknown>[]) {
+  const seen = new Set<string>()
+  return records.filter((record) => {
+    const key = [
+      readString(record.provider),
+      readString(record.type),
+      cleanDomain(record.domain),
+      readNumber(record.amount) ?? "",
+      readString(record.dueDate) ?? "",
+      readString(record.sourceRef) ?? "",
+    ].join("|")
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 function normalizeDraft(
   draft: RawInfrastructureDraft
 ): Record<string, unknown> | null {
@@ -974,6 +1088,7 @@ export async function POST(
       readString(workspace.name) ||
       params.workspaceId
 
+    const deterministicRecords = parseRenewalBillingEvidence(evidence)
     const drafts = await analyzeWithClaude(
       buildPrompt({
         workspaceName,
@@ -982,9 +1097,16 @@ export async function POST(
       })
     )
 
-    const normalized = drafts
-      .map(normalizeDraft)
-      .filter((r): r is Record<string, unknown> => r !== null)
+    const normalized = dedupeInfrastructureRecords([
+      ...deterministicRecords,
+      ...drafts
+        .map(normalizeDraft)
+        .filter((r): r is Record<string, unknown> => r !== null),
+    ]).filter((record) => {
+      const type = readString(record.type)
+      if (type !== "domain" && type !== "invoice") return true
+      return Boolean(readString(record.domain) || readNumber(record.amount) || readString(record.dueDate))
+    })
 
     if (normalized.length === 0) {
       return NextResponse.json({
@@ -1030,6 +1152,43 @@ export async function POST(
         },
         { merge: true }
       )
+
+      if (shouldCreateExpense(record)) {
+        const serviceProvider = serviceProviderForRecord(record)
+        const expenseRef = workspaceRef
+          .collection("expenses")
+          .doc(`${String(record.sourceSystem).replace(/[^a-z0-9]/gi, "_")}_${fingerprint}`)
+        batch.set(
+          expenseRef,
+          {
+            source:
+              serviceProvider === "Other"
+                ? "Infrastructure Billing Evidence"
+                : `${serviceProvider} ${billingCycleForRecord(record)}`,
+            description:
+              readString(record.evidenceSnippet, 240) ||
+              `${billingCycleForRecord(record)}${readString(record.domain) ? ` for ${readString(record.domain)}` : ""}`,
+            amount: readNumber(record.amount),
+            status: expenseStatusForRecord(record),
+            serviceProvider,
+            billingCycleType: billingCycleForRecord(record),
+            dueDate: readString(record.dueDate),
+            vendor: serviceProvider === "Other" ? null : serviceProvider,
+            category: "infrastructure",
+            domain: cleanDomain(record.domain),
+            sourceSystem: readString(record.sourceSystem),
+            sourceRef: readString(record.sourceRef),
+            evidenceSnippet: readString(record.evidenceSnippet, 240),
+            confidence: readNumber(record.confidence),
+            contractAppendageReady: true,
+            createdByUid: decoded.uid,
+            createdByEmail: decoded.email ?? null,
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+      }
       created.push({ id: linkRef.id, ...record })
     }
 
