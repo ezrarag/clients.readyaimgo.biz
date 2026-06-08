@@ -77,6 +77,7 @@ import {
 } from "@/lib/workspace-files"
 import type { WorkspaceFile } from "@/lib/workspace-files"
 import type {
+  AssetProjectType,
   GitHubRepo,
   ManualDnsTarget,
   StaticHostingPlatform,
@@ -85,6 +86,11 @@ import type {
   WorkspaceMeetingProvider,
   WorkspaceMember,
   WorkspaceRole,
+} from "@/lib/workspaces"
+import {
+  ASSET_PROJECT_TYPES,
+  assetProjectTypeLabel,
+  parseAssetProjectType,
 } from "@/lib/workspaces"
 import type { ValuePaymentRecord } from "@/lib/value-profile"
 import type { ClientDeliverable } from "@/lib/deliverables"
@@ -177,6 +183,9 @@ interface GeneratedDraft {
   timeline: string
   assumptions: string[]
   clientResponsibilities: string[]
+  proposedAmount: number
+  pricingCadence: "one-time" | "monthly" | "milestone" | "custom"
+  paymentDates: string[]
   paymentTerms: string
   revisionTerms: string
   legalReviewNotes: string
@@ -223,8 +232,6 @@ interface WorkspaceProject {
   createdAt?: string
 }
 
-type AssetProjectType = "webdev" | "participant" | "transportation" | "real-estate"
-
 interface WorkspaceProjectTask {
   id: string
   title?: string
@@ -245,6 +252,7 @@ interface StatusVideoUpdate {
   title: string
   videoUrl: string
   aiSummary: string[]
+  assetProjectType: AssetProjectType
 }
 
 interface CorrespondenceItem {
@@ -482,20 +490,35 @@ function projectCommitLabel(project: WorkspaceProject) {
   return sha ? sha.slice(0, 7) : "commit pending"
 }
 
-const ASSET_PROJECT_TYPES: Array<{ value: AssetProjectType; label: string }> = [
-  { value: "webdev", label: "Nexus" },
-  { value: "participant", label: "Participant Cohort" },
-  { value: "transportation", label: "Motion Network" },
-  { value: "real-estate", label: "Real Estate Portfolio" },
-]
+function classifyStatusVideoType(data: Record<string, unknown>, fallback: AssetProjectType) {
+  const hasExplicitType =
+    data.assetProjectType !== undefined ||
+    data.projectType !== undefined ||
+    data.workspaceType !== undefined ||
+    data.category !== undefined
+  if (hasExplicitType) {
+    return parseAssetProjectType(
+      data.assetProjectType ?? data.projectType ?? data.workspaceType ?? data.category
+    )
+  }
 
-function parseAssetProjectType(value: unknown): AssetProjectType {
-  return value === "participant" ||
-    value === "transportation" ||
-    value === "real-estate" ||
-    value === "webdev"
-    ? value
-    : "webdev"
+  const text = [data.title, data.aiSummary, data.description, data.summary]
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase()
+
+  if (text.includes("cohort")) return "participant"
+  if (text.includes("motion") || text.includes("transport") || text.includes("fleet")) {
+    return "transportation"
+  }
+  if (text.includes("space") || text.includes("real estate") || text.includes("property")) {
+    return "real-estate"
+  }
+  if (text.includes("nexus") || text.includes("website") || text.includes("web app")) {
+    return "webdev"
+  }
+  return fallback
 }
 
 function fleetIdsForProject(project: WorkspaceProject) {
@@ -1098,6 +1121,7 @@ export default function WorkspacePage() {
   const [repoQuery, setRepoQuery] = useState("")
   const [vercelQuery, setVercelQuery] = useState("")
   const [projectTypeOverrides, setProjectTypeOverrides] = useState<Record<string, AssetProjectType>>({})
+  const [showAvailableRepos, setShowAvailableRepos] = useState(false)
   const [showEcosystemSearch, setShowEcosystemSearch] = useState(false)
   const [savingHosting, setSavingHosting] = useState(false)
   const [savingConnectors, setSavingConnectors] = useState(false)
@@ -1365,6 +1389,7 @@ export default function WorkspacePage() {
                   "ReadyAimGo Build Update",
                 videoUrl,
                 aiSummary: normalizeAiSummary(data.aiSummary),
+                assetProjectType: classifyStatusVideoType(data, dominantType),
               }
             })
             .filter((item) => item.videoUrl)
@@ -1382,7 +1407,7 @@ export default function WorkspacePage() {
     return () => {
       cancelled = true
     }
-  }, [user, workspace?.clientId])
+  }, [dominantType, user, workspace?.clientId])
 
   useEffect(() => {
     if (!user || !selectedProjectId) {
@@ -1617,8 +1642,12 @@ export default function WorkspacePage() {
         title: res.draft.title,
         summary: res.draft.summary,
         notes,
-        monthlyValue: 0,
-        termMonths: 0,
+        monthlyValue:
+          res.draft.pricingCadence === "monthly" ? res.draft.proposedAmount : 0,
+        proposedAmount: res.draft.proposedAmount,
+        pricingCadence: res.draft.pricingCadence,
+        paymentDates: res.draft.paymentDates,
+        termMonths: res.draft.pricingCadence === "monthly" ? 1 : 0,
         startDate: null,
         endDate: null,
         createdAt: new Date().toISOString(),
@@ -2361,9 +2390,9 @@ export default function WorkspacePage() {
                   const repositoryLabel = projectRepositoryLabel(project)
                   const repositoryUrl = projectRepositoryUrl(project)
                   const projectMembers = membersForProject(project, members)
-                  const assetType =
-                    projectTypeOverrides[project.id] ??
-                    parseAssetProjectType(project.assetProjectType ?? project.projectType)
+                  const assetType = parseAssetProjectType(
+                    project.assetProjectType ?? project.projectType
+                  )
                   return (
                     <Card
                       key={project.id}
@@ -2379,22 +2408,29 @@ export default function WorkspacePage() {
                           </div>
                           <select
                             value={assetType}
-                            onChange={(event) =>
-                              setProjectTypeOverrides((prev) => ({
-                                ...prev,
-                                [project.id]: event.target.value as AssetProjectType,
-                              }))
-                            }
-                            className="h-8 shrink-0 rounded-full border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                            title="Project asset type"
+                            onChange={(event) => {
+                              event.currentTarget.value = assetType
+                            }}
+                            className="h-8 shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 shadow-sm"
+                            title="This workspace is locked to its original project type. Create another workspace from /dashboard for a different type."
                           >
                             {ASSET_PROJECT_TYPES.map((type) => (
-                              <option key={type.value} value={type.value}>
+                              <option
+                                key={type.value}
+                                value={type.value}
+                                disabled={type.value !== assetType}
+                              >
                                 {type.label}
+                                {type.value !== assetType ? " (create another workspace)" : ""}
                               </option>
                             ))}
                           </select>
                         </div>
+                        <p className="text-xs leading-5 text-slate-400">
+                          Workspace type is locked to {assetProjectTypeLabel(assetType)}.
+                          Create another workspace from the dashboard to use a different
+                          project type.
+                        </p>
                       </CardHeader>
                       <CardContent className="flex flex-1 flex-col">
                         <p className="min-h-16 text-sm leading-6 text-slate-600">
@@ -2998,20 +3034,31 @@ export default function WorkspacePage() {
 
               {/* Available repos */}
               <div className="space-y-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                  Available ({filteredRepos.filter((r) => !attachedRepoIds.has(r.id)).length})
-                </p>
-                {filteredRepos
-                  .filter((r) => !attachedRepoIds.has(r.id))
-                  .map((repo) => (
-                    <RepoCard
-                      key={repo.id}
-                      repo={repo}
-                      attached={false}
-                      onToggle={() => void toggleRepo(repo)}
-                      busy={reposBusy.has(repo.id)}
-                    />
-                  ))}
+                <button
+                  type="button"
+                  onClick={() => setShowAvailableRepos((value) => !value)}
+                  className="flex w-full items-center justify-between rounded-xl border border-border bg-slate-50 px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 transition hover:bg-slate-100"
+                >
+                  <span>
+                    Available ({filteredRepos.filter((r) => !attachedRepoIds.has(r.id)).length})
+                  </span>
+                  <span className="text-[10px] tracking-normal">
+                    {showAvailableRepos ? "Hide" : "Expand"}
+                  </span>
+                </button>
+                {showAvailableRepos
+                  ? filteredRepos
+                      .filter((r) => !attachedRepoIds.has(r.id))
+                      .map((repo) => (
+                        <RepoCard
+                          key={repo.id}
+                          repo={repo}
+                          attached={false}
+                          onToggle={() => void toggleRepo(repo)}
+                          busy={reposBusy.has(repo.id)}
+                        />
+                      ))
+                  : null}
               </div>
             </CardContent>
           </Card>
@@ -3571,6 +3618,12 @@ export default function WorkspacePage() {
             contract={selectedContract}
             open={detailOpen}
             onOpenChange={setDetailOpen}
+            onContractUpdated={(contract) => {
+              setContracts((prev) =>
+                prev.map((item) => (item.id === contract.id ? contract : item))
+              )
+              setSelectedContract(contract)
+            }}
             onStatusUpdated={(id, status) => {
               setContracts((prev) =>
                 prev.map((c) => (c.id === id ? { ...c, status } : c))
@@ -3789,7 +3842,12 @@ export default function WorkspacePage() {
                 {statusVideos.map((update) => (
                   <Card key={update.id} className="overflow-hidden">
                     <CardHeader>
-                      <CardTitle>{update.title}</CardTitle>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <CardTitle>{update.title}</CardTitle>
+                        <Badge variant="secondary">
+                          {assetProjectTypeLabel(update.assetProjectType)}
+                        </Badge>
+                      </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <video
@@ -3986,22 +4044,22 @@ export default function WorkspacePage() {
                         {currencyFormatter.format(paymentData.retainerBalance)}
                       </p>
                     </div>
-                    {/* Carousel: Valuation / Contract Alignment / Hosting Implications */}
+                    {/* Carousel: Contract Alignment / Hosting Implications / Build Comparison / Valuation */}
                     <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-5">
                       {/* Carousel header */}
                       <div className="flex items-center justify-between gap-2">
                         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
                           {retainerSlide === 0
-                            ? "Valuation"
+                            ? "Contract Alignment"
                             : retainerSlide === 1
-                              ? "Contract Alignment"
+                              ? "Hosting Implications"
                               : retainerSlide === 2
-                                ? "Hosting Implications"
-                                : dominantType === "transportation"
+                                ? dominantType === "transportation"
                                   ? "Mobility Cost Comparison"
                                   : dominantType === "real-estate"
-                                    ? "Real Estate Comparison"
-                                    : "Build Cost Comparison"}
+                                    ? "Space Network Comparison"
+                                    : "Build Cost Comparison"
+                                : "Valuation"}
                         </p>
                         <div className="flex items-center gap-0.5">
                           <button
@@ -4028,8 +4086,8 @@ export default function WorkspacePage() {
                         </div>
                       </div>
 
-                      {/* Slide 0 — Valuation */}
-                      {retainerSlide === 0 ? (
+                      {/* Slide 3 — Valuation */}
+                      {retainerSlide === 3 ? (
                         <div className="mt-4 space-y-3">
                           {agencyValuationBenchmarks.length === 0 ? (
                             <div className="rounded-xl bg-white/70 px-3 py-3">
@@ -4063,8 +4121,8 @@ export default function WorkspacePage() {
                         </div>
                       ) : null}
 
-                      {/* Slide 1 — Contract Alignment */}
-                      {retainerSlide === 1 ? (
+                      {/* Slide 0 — Contract Alignment */}
+                      {retainerSlide === 0 ? (
                         <div className="mt-4 space-y-3">
                           {contracts.length === 0 ? (
                             <div className="rounded-xl bg-white/70 px-3 py-3">
@@ -4092,12 +4150,16 @@ export default function WorkspacePage() {
                                     {contract.status}
                                   </Badge>
                                 </div>
-                                {contract.monthlyValue > 0 ? (
+                                {contract.monthlyValue > 0 || (contract.proposedAmount ?? 0) > 0 ? (
                                   <p className="mt-0.5 text-xs text-slate-500">
-                                    {currencyFormatter.format(contract.monthlyValue)}/mo
-                                    {contract.termMonths > 0
-                                      ? ` · ${contract.termMonths} month term`
-                                      : ""}
+                                    {contract.monthlyValue > 0
+                                      ? `${currencyFormatter.format(contract.monthlyValue)}/mo`
+                                      : `${currencyFormatter.format(contract.proposedAmount ?? 0)} proposed ${contract.pricingCadence ?? "amount"}`}
+                                    {contract.paymentDates?.length
+                                      ? ` · ${contract.paymentDates.join(", ")}`
+                                      : contract.termMonths > 0
+                                        ? ` · ${contract.termMonths} month term`
+                                        : ""}
                                   </p>
                                 ) : null}
                               </div>
@@ -4105,19 +4167,22 @@ export default function WorkspacePage() {
                           )}
                           <div className="border-t border-amber-200/70 pt-3">
                             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
-                              Total Contracted Monthly Value
+                              Total Contract / Proposed Value
                             </p>
                             <p className="mt-1 text-xl font-bold text-slate-950">
                               {currencyFormatter.format(
-                                contracts.reduce((sum, c) => sum + (c.monthlyValue || 0), 0)
+                                contracts.reduce(
+                                  (sum, c) => sum + (c.monthlyValue || c.proposedAmount || 0),
+                                  0
+                                )
                               )}
                             </p>
                           </div>
                         </div>
                       ) : null}
 
-                      {/* Slide 2 — Hosting Implications */}
-                      {retainerSlide === 2 ? (
+                      {/* Slide 1 — Hosting Implications */}
+                      {retainerSlide === 1 ? (
                         <div className="mt-4 space-y-3">
                           {expenses.length === 0 ? (
                             <div className="rounded-xl bg-white/70 px-3 py-3">
@@ -4131,7 +4196,7 @@ export default function WorkspacePage() {
                               <div key={expense.id} className="rounded-xl bg-white/70 px-3 py-2">
                                 <div className="flex items-start justify-between gap-2">
                                   <p className="text-xs font-semibold leading-5 text-slate-800">
-                                    {expense.source}
+                                  {expense.serviceProvider} payable to {expense.vendor || expense.serviceProvider}
                                   </p>
                                   <Badge
                                     variant={
@@ -4148,6 +4213,13 @@ export default function WorkspacePage() {
                                 </div>
                                 <p className="mt-0.5 text-xs text-slate-500">
                                   {currencyFormatter.format(expense.amount)} · {expense.billingCycleType}
+                                  {expense.dueDate
+                                    ? ` · due ${formatSafeDate(expense.dueDate, { month: "short", day: "numeric", year: "numeric" })}`
+                                    : ""}
+                                  {expense.domain ? ` · ${expense.domain}` : ""}
+                                </p>
+                                <p className="mt-0.5 text-[11px] leading-4 text-slate-400">
+                                  {expense.description}
                                 </p>
                               </div>
                             ))
@@ -4167,8 +4239,8 @@ export default function WorkspacePage() {
                         </div>
                       ) : null}
 
-                      {/* Slide 3 — Service-Aware Comparison */}
-                      {retainerSlide === 3 ? (
+                      {/* Slide 2 — Service-Aware Comparison */}
+                      {retainerSlide === 2 ? (
                         dominantType === "transportation" ? (
                           /* Mobility Cost Comparison */
                           <div className="mt-4 space-y-3">
@@ -4232,11 +4304,11 @@ export default function WorkspacePage() {
                             </div>
                           </div>
                         ) : dominantType === "real-estate" ? (
-                          /* Real Estate Comparison — placeholder */
+                          /* Space Network Comparison — placeholder */
                           <div className="mt-4 space-y-3">
                             <div className="rounded-xl bg-white/70 px-3 py-3">
                               <p className="text-xs font-medium leading-5 text-slate-500">
-                                Real estate portfolio comparison — coming soon.
+                                Space Network comparison — coming soon.
                               </p>
                             </div>
                             <div className="border-t border-amber-200/70 pt-3">
@@ -4244,7 +4316,7 @@ export default function WorkspacePage() {
                                 Your retainer covers
                               </p>
                               <p className="mt-1 text-[11px] leading-5 text-slate-600">
-                                Property tracking, location mapping, and portfolio management,
+                                Space tracking, location mapping, and portfolio management,
                                 continuously delivered.
                               </p>
                             </div>
@@ -4277,9 +4349,20 @@ export default function WorkspacePage() {
                             ].map((row) => (
                               <div key={row.name} className="rounded-xl bg-white/70 px-3 py-2">
                                 <div className="flex items-start justify-between gap-2">
-                                  <p className="text-xs font-semibold leading-5 text-slate-800">
-                                    {row.name}
-                                  </p>
+                                  {row.name === "ReadyAimGo Nexus" ? (
+                                    <a
+                                      href="https://www.readyaimgo.biz/services/nexus"
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-xs font-semibold leading-5 text-primary hover:underline"
+                                    >
+                                      {row.name}
+                                    </a>
+                                  ) : (
+                                    <p className="text-xs font-semibold leading-5 text-slate-800">
+                                      {row.name}
+                                    </p>
+                                  )}
                                   <div className="flex shrink-0 items-center gap-1.5">
                                     <Badge variant={row.variant} className="text-[10px]">
                                       {row.scope}

@@ -27,7 +27,8 @@ import {
 import { Input } from "@/components/ui/input"
 import { HelpMark } from "@/components/ui/help-mark"
 import { signOut } from "@/lib/firebase/auth"
-import type { Workspace } from "@/lib/workspaces"
+import { ASSET_PROJECT_TYPES } from "@/lib/workspaces"
+import type { AssetProjectType, Workspace } from "@/lib/workspaces"
 
 function cleanString(value: string | null | undefined) {
   return typeof value === "string" ? value.trim() : ""
@@ -152,14 +153,114 @@ async function loadWorkspaces(user: { getIdToken: () => Promise<string> }) {
 
 function uniqueWorkspaces(workspaces: Workspace[]) {
   const seen = new Set<string>()
-  return workspaces.filter((workspace) => {
+  const byId = workspaces.filter((workspace) => {
     if (seen.has(workspace.id)) return false
     seen.add(workspace.id)
     return true
   })
+
+  const nonPlaceholderKeys = new Set<string>()
+  for (const workspace of byId) {
+    if (isEmailPlaceholderWorkspace(workspace)) continue
+    workspaceDedupeKeys(workspace).forEach((key) => nonPlaceholderKeys.add(key))
+  }
+
+  const withoutEmailPlaceholders = byId.filter((workspace) => {
+    if (!isEmailPlaceholderWorkspace(workspace)) return true
+    return !workspaceDedupeKeys(workspace).some((key) => nonPlaceholderKeys.has(key))
+  })
+
+  const bestByExactSurface = new Map<string, Workspace>()
+  const unkeyed: Workspace[] = []
+
+  for (const workspace of withoutEmailPlaceholders) {
+    const exactKey = exactWorkspaceSurfaceKey(workspace)
+    if (!exactKey) {
+      unkeyed.push(workspace)
+      continue
+    }
+
+    const current = bestByExactSurface.get(exactKey)
+    if (!current || workspaceQualityScore(workspace) > workspaceQualityScore(current)) {
+      bestByExactSurface.set(exactKey, workspace)
+    }
+  }
+
+  return [...bestByExactSurface.values(), ...unkeyed].sort((a, b) => {
+    const ta = a.updatedAt ? new Date(a.updatedAt).getTime() : 0
+    const tb = b.updatedAt ? new Date(b.updatedAt).getTime() : 0
+    return tb - ta
+  })
 }
 
-async function createWorkspace(user: { getIdToken: () => Promise<string> }, name: string) {
+function workspaceDedupeKeys(workspace: Workspace) {
+  const keys = [
+    cleanString(workspace.clientEmail),
+    cleanString(workspace.registrationEmail),
+    cleanString(workspace.clientId).includes("@") ? cleanString(workspace.clientId) : "",
+  ]
+    .map((value) => value.toLowerCase())
+    .filter(Boolean)
+
+  const emailDomain =
+    domainFromEmail(workspace.registrationEmail) ||
+    domainFromEmail(workspace.clientEmail) ||
+    domainFromEmail(workspace.clientId)
+  if (emailDomain) keys.push(`email-domain:${emailDomain}`)
+
+  return Array.from(new Set(keys))
+}
+
+function workspaceQualityScore(workspace: Workspace) {
+  return (
+    workspace.repos.length * 4 +
+    workspace.vercelProjects.length * 4 +
+    workspace.projectIds.length * 3 +
+    workspace.contractIds.length * 3 +
+    workspace.memberCount +
+    (resolvePrimaryDomain(workspace) ? 3 : 0) +
+    (cleanString(workspace.workspaceName) ? 2 : 0) +
+    (cleanString(workspace.businessName) || cleanString(workspace.clientBusinessName) ? 2 : 0)
+  )
+}
+
+function isEmailPlaceholderWorkspace(workspace: Workspace) {
+  const hasMappedAssets =
+    workspace.repos.length > 0 ||
+    workspace.vercelProjects.length > 0 ||
+    workspace.projectIds.length > 0 ||
+    workspace.contractIds.length > 0 ||
+    Boolean(resolvePrimaryDomain(workspace)) ||
+    workspace.hosting.domainRegistrars.length > 0 ||
+    workspace.hosting.manualDnsTargets.length > 0 ||
+    workspace.hosting.staticHosts.length > 0
+  if (hasMappedAssets) return false
+
+  const emailDomain =
+    domainFromEmail(workspace.registrationEmail) ||
+    domainFromEmail(workspace.clientEmail) ||
+    domainFromEmail(workspace.clientId)
+  if (!emailDomain) return false
+
+  const titleDomain = domainFromUrl(resolveWorkspaceDisplayName(workspace))
+  return titleDomain === emailDomain
+}
+
+function exactWorkspaceSurfaceKey(workspace: Workspace) {
+  const primaryDomain = resolvePrimaryDomain(workspace)
+  if (primaryDomain) return `domain:${primaryDomain}`
+
+  const displayName = resolveWorkspaceDisplayName(workspace).toLowerCase()
+  if (!displayName || displayName === "untitled workspace") return ""
+
+  return `name:${displayName}`
+}
+
+async function createWorkspace(
+  user: { getIdToken: () => Promise<string> },
+  name: string,
+  initialProjectType: AssetProjectType
+) {
   const token = await user.getIdToken()
   const res = await fetch("/api/workspaces", {
     method: "POST",
@@ -167,7 +268,7 @@ async function createWorkspace(user: { getIdToken: () => Promise<string> }, name
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, initialProjectType }),
   })
   const payload = (await res.json()) as { workspace?: Workspace; error?: string }
   if (!res.ok) throw new Error(payload.error ?? "Unable to create workspace.")
@@ -241,7 +342,10 @@ function WorkspaceTitleEditor({
       <button
         type="button"
         className="min-w-0 truncate text-left"
-        onClick={() => setEditing(true)}
+        onClick={(event) => {
+          event.stopPropagation()
+          setEditing(true)
+        }}
         title="Edit workspace title"
       >
         {title}
@@ -252,6 +356,7 @@ function WorkspaceTitleEditor({
   return (
     <Input
       value={draft}
+      onClick={(event) => event.stopPropagation()}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => {
         const fallbackTitle = cleanString(draft) || "Untitled Workspace"
@@ -266,6 +371,7 @@ function WorkspaceTitleEditor({
         setEditing(false)
       }}
       onKeyDown={(event) => {
+        event.stopPropagation()
         if (event.key === "Enter") event.currentTarget.blur()
         if (event.key === "Escape") {
           setDraft(title)
@@ -286,6 +392,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState("")
+  const [initialProjectType, setInitialProjectType] = useState<AssetProjectType>("webdev")
   const [showCreate, setShowCreate] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -308,9 +415,10 @@ export default function DashboardPage() {
     setCreating(true)
     setError(null)
     try {
-      const ws = await createWorkspace(user, newName.trim())
+      const ws = await createWorkspace(user, newName.trim(), initialProjectType)
       setWorkspaces((prev) => uniqueWorkspaces([ws, ...prev]))
       setNewName("")
+      setInitialProjectType("webdev")
       setShowCreate(false)
       router.push(`/workspace/${ws.id}`)
     } catch (err) {
@@ -373,34 +481,69 @@ export default function DashboardPage() {
       {/* Create workspace inline form */}
       <div className="mb-6">
         {showCreate ? (
-          <div className="flex flex-col gap-3 rounded-[28px] border border-border bg-white/80 p-5 sm:flex-row">
-            <Input
-              placeholder="Workspace name — e.g. Acme Corp, My App"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void handleCreate()
-              }}
-              autoFocus
-            />
-            <div className="flex gap-2">
-              <Button onClick={handleCreate} disabled={creating || !newName.trim()}>
-                {creating ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Plus className="mr-2 h-4 w-4" />
-                )}
-                Create
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowCreate(false)
-                  setNewName("")
-                }}
-              >
-                Cancel
-              </Button>
+          <div className="space-y-4 rounded-[28px] border border-border bg-white/80 p-5">
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-700">Workspace name</label>
+                <Input
+                  placeholder="Workspace name — e.g. Acme Corp, My App"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleCreate()
+                  }}
+                  autoFocus
+                />
+              </div>
+              <div className="flex items-end gap-2">
+                <Button onClick={handleCreate} disabled={creating || !newName.trim()}>
+                  {creating ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Plus className="mr-2 h-4 w-4" />
+                  )}
+                  Create
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowCreate(false)
+                    setNewName("")
+                    setInitialProjectType("webdev")
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-700">Initial project area</p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  This creates the first project inside the workspace and sets the view used on
+                  the workspace Projects tab.
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                {ASSET_PROJECT_TYPES.map((type) => {
+                  const selected = initialProjectType === type.value
+                  return (
+                    <button
+                      key={type.value}
+                      type="button"
+                      onClick={() => setInitialProjectType(type.value)}
+                      className={[
+                        "rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition",
+                        selected
+                          ? "border-slate-950 bg-slate-950 text-white shadow-sm"
+                          : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white",
+                      ].join(" ")}
+                    >
+                      {type.label}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
           </div>
         ) : (
@@ -440,77 +583,92 @@ export default function DashboardPage() {
             const memberSummaries = ws.memberSummaries ?? []
 
             return (
-              <Card key={ws.id} className="h-full transition-shadow hover:shadow-md">
-                  <CardHeader>
-                    <CardTitle className="flex items-start justify-between gap-2">
-                      <WorkspaceTitleEditor
-                        workspace={ws}
-                        title={displayName}
-                        canEdit={canEditTitle}
-                        user={user}
-                        onLocalTitleChange={handleLocalTitleChange}
-                        onError={setError}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 shrink-0 text-slate-400 hover:text-slate-950"
-                        onClick={() => router.push(`/workspace/${ws.id}`)}
-                        title="Open workspace"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                      </Button>
-                    </CardTitle>
-                    <CardDescription className="space-y-1">
-                      <span className="block text-sm text-slate-500">
-                        Primary Domain: {primaryDomain || "Not mapped yet"}
-                      </span>
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex flex-wrap gap-2">
-                      <span className="group/git relative inline-flex">
-                        <Badge variant="secondary">
-                          <Github className="mr-1 h-3 w-3" />
-                          Git {ws.repos.length}
-                        </Badge>
-                        {primaryRepo ? (
-                          <span className="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden min-w-64 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700 shadow-lg group-hover/git:block">
-                            {primaryRepo.url}
-                            {ws.repos.length > 1 ? (
-                              <span className="block text-slate-500">
-                                +{ws.repos.length - 1} more
-                              </span>
-                            ) : null}
-                          </span>
-                        ) : null}
-                      </span>
+              <Card
+                key={ws.id}
+                role="link"
+                tabIndex={0}
+                className="h-full cursor-pointer transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                onClick={() => router.push(`/workspace/${ws.id}`)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault()
+                    router.push(`/workspace/${ws.id}`)
+                  }
+                }}
+              >
+                <CardHeader>
+                  <CardTitle className="flex items-start justify-between gap-2">
+                    <WorkspaceTitleEditor
+                      workspace={ws}
+                      title={displayName}
+                      canEdit={canEditTitle}
+                      user={user}
+                      onLocalTitleChange={handleLocalTitleChange}
+                      onError={setError}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 shrink-0 text-slate-400 hover:text-slate-950"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        router.push(`/workspace/${ws.id}`)
+                      }}
+                      title="Open workspace"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                    </Button>
+                  </CardTitle>
+                  <CardDescription className="space-y-1">
+                    <span className="block text-sm text-slate-500">
+                      Primary Domain: {primaryDomain || "Not mapped yet"}
+                    </span>
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="group/git relative inline-flex">
                       <Badge variant="secondary">
-                        <Server className="mr-1 h-3 w-3" />
-                        Vercel {ws.vercelProjects.length}
+                        <Github className="mr-1 h-3 w-3" />
+                        Git {ws.repos.length}
                       </Badge>
-                      <span className="group/team relative inline-flex">
-                        <Badge variant="secondary">
-                          <Users className="mr-1 h-3 w-3" />
-                          Team {ws.memberCount}
-                        </Badge>
-                        <span className="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden min-w-64 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700 shadow-lg group-hover/team:block">
-                          {memberSummaries.length > 0 ? (
-                            memberSummaries.map((member) => (
-                              <span key={member.uid} className="block">
-                                {displayMemberName(member)}
-                                <span className="ml-1 text-slate-400">({member.role})</span>
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-slate-500">No workspace members loaded yet.</span>
-                          )}
+                      {primaryRepo ? (
+                        <span className="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden min-w-64 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700 shadow-lg group-hover/git:block">
+                          {primaryRepo.url}
+                          {ws.repos.length > 1 ? (
+                            <span className="block text-slate-500">
+                              +{ws.repos.length - 1} more
+                            </span>
+                          ) : null}
                         </span>
+                      ) : null}
+                    </span>
+                    <Badge variant="secondary">
+                      <Server className="mr-1 h-3 w-3" />
+                      Vercel {ws.vercelProjects.length}
+                    </Badge>
+                    <span className="group/team relative inline-flex">
+                      <Badge variant="secondary">
+                        <Users className="mr-1 h-3 w-3" />
+                        Team {ws.memberCount}
+                      </Badge>
+                      <span className="pointer-events-none absolute left-0 top-full z-20 mt-2 hidden min-w-64 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700 shadow-lg group-hover/team:block">
+                        {memberSummaries.length > 0 ? (
+                          memberSummaries.map((member) => (
+                            <span key={member.uid} className="block">
+                              {displayMemberName(member)}
+                              <span className="ml-1 text-slate-400">({member.role})</span>
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-slate-500">No workspace members loaded yet.</span>
+                        )}
                       </span>
-                    </div>
-                  </CardContent>
-                </Card>
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
             )
           })}
         </div>

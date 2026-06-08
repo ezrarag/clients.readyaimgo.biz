@@ -684,6 +684,12 @@ export default function AdminContractsPage() {
         isAdmin
         open={detailOpen}
         onOpenChange={setDetailOpen}
+        onContractUpdated={(contract) => {
+          setContracts((prev) =>
+            prev.map((item) => (item.id === contract.id ? contract : item))
+          )
+          setSelectedContract(contract)
+        }}
         onStatusUpdated={handleStatusUpdated}
       />
 

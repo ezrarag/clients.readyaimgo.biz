@@ -16,6 +16,28 @@ export type WorkspaceRole =
   | "employee-of-client"
   | "beam-participant"
 
+export type AssetProjectType = "webdev" | "participant" | "transportation" | "real-estate"
+
+export const ASSET_PROJECT_TYPES: Array<{ value: AssetProjectType; label: string }> = [
+  { value: "webdev", label: "Nexus" },
+  { value: "participant", label: "Cohort Network" },
+  { value: "transportation", label: "Motion Network" },
+  { value: "real-estate", label: "Space Network" },
+]
+
+export function parseAssetProjectType(value: unknown): AssetProjectType {
+  return value === "participant" ||
+    value === "transportation" ||
+    value === "real-estate" ||
+    value === "webdev"
+    ? value
+    : "webdev"
+}
+
+export function assetProjectTypeLabel(value: AssetProjectType) {
+  return ASSET_PROJECT_TYPES.find((type) => type.value === value)?.label ?? "Nexus"
+}
+
 export interface GitHubRepo {
   id: number
   fullName: string

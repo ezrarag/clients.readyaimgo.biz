@@ -5,9 +5,11 @@ import { buildFirebaseAuthFailureDiagnostics } from "@/lib/firebase-diagnostics"
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
 import { getBearerToken } from "@/lib/portal-auth"
 import {
+  assetProjectTypeLabel,
   generateWorkspaceId,
   normalizeWorkspace,
   normalizeWorkspaceMember,
+  parseAssetProjectType,
   parseWorkspaceRole,
   slugifyWorkspaceName,
 } from "@/lib/workspaces"
@@ -35,6 +37,55 @@ function workspaceNameSlug(data: Record<string, unknown>) {
     readString(data.name) ||
     ""
   return slugifyWorkspaceName(name)
+}
+
+function safeProjectDocId(value: string) {
+  return value.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 180)
+}
+
+function initialProjectId(workspaceId: string, projectType: ReturnType<typeof parseAssetProjectType>) {
+  return safeProjectDocId(`${workspaceId}__initial__${projectType}`)
+}
+
+function buildInitialProject({
+  projectId,
+  workspaceId,
+  workspaceName,
+  projectType,
+  clientId,
+  uid,
+  email,
+  now,
+}: {
+  projectId: string
+  workspaceId: string
+  workspaceName: string
+  projectType: ReturnType<typeof parseAssetProjectType>
+  clientId: string | null
+  uid: string
+  email: string
+  now: FirebaseFirestore.FieldValue
+}) {
+  const label = assetProjectTypeLabel(projectType)
+  const title = `${workspaceName} ${label}`.trim()
+  return {
+    id: projectId,
+    name: title,
+    title,
+    summary: `${label} project created from the workspace dashboard.`,
+    description: `${label} project created from the workspace dashboard.`,
+    workspaceId,
+    clientId,
+    assetProjectType: projectType,
+    projectType,
+    status: "scoping",
+    source: "dashboard-create",
+    sourceNgo: "readyaimgo",
+    createdByUid: uid,
+    createdByEmail: email.toLowerCase(),
+    createdAt: now,
+    updatedAt: now,
+  }
 }
 
 async function findExistingWorkspaceForName({
@@ -266,6 +317,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as Record<string, unknown>
     const name =
       typeof body.name === "string" && body.name.trim() ? body.name.trim() : null
+    const initialProjectType = parseAssetProjectType(body.initialProjectType)
 
     if (!name) {
       return NextResponse.json({ error: "name is required." }, { status: 400 })
@@ -315,13 +367,33 @@ export async function POST(request: NextRequest) {
     if (existingWorkspace) {
       const workspaceRef = db.collection("workspaces").doc(existingWorkspace.id)
       const batch = db.batch()
+      const projectId = initialProjectId(existingWorkspace.id, initialProjectType)
+      const projectRef = db.collection("projects").doc(projectId)
 
       batch.set(
         workspaceRef,
         {
           ownerUid: readString(existingWorkspace.data.ownerUid) || uid,
+          projectIds: FieldValue.arrayUnion(projectId),
           updatedAt: now,
         },
+        { merge: true }
+      )
+      batch.set(
+        projectRef,
+        buildInitialProject({
+          projectId,
+          workspaceId: existingWorkspace.id,
+          workspaceName:
+            readString(existingWorkspace.data.workspaceName) ||
+            readString(existingWorkspace.data.name) ||
+            name,
+          projectType: initialProjectType,
+          clientId,
+          uid,
+          email,
+          now,
+        }),
         { merge: true }
       )
       batch.set(workspaceRef.collection("members").doc(uid), {
@@ -370,6 +442,16 @@ export async function POST(request: NextRequest) {
           workspace: normalizeWorkspace(existingWorkspace.id, {
             ...existingWorkspace.data,
             ownerUid: readString(existingWorkspace.data.ownerUid) || uid,
+            projectIds: Array.from(
+              new Set([
+                ...(Array.isArray(existingWorkspace.data.projectIds)
+                  ? (existingWorkspace.data.projectIds as unknown[]).filter(
+                      (id): id is string => typeof id === "string"
+                    )
+                  : []),
+                projectId,
+              ])
+            ),
             updatedAt: new Date().toISOString(),
           }),
           reused: true,
@@ -379,12 +461,15 @@ export async function POST(request: NextRequest) {
     }
 
     const workspaceId = generateWorkspaceId(name)
+    const projectId = initialProjectId(workspaceId, initialProjectType)
     const batch = db.batch()
 
     const workspaceRef = db.collection("workspaces").doc(workspaceId)
+    const projectRef = db.collection("projects").doc(projectId)
 
     const workspaceDoc: Record<string, unknown> = {
       name,
+      workspaceName: name,
       ownerUid: uid,
       repos: [],
       vercelProjects: [],
@@ -412,13 +497,26 @@ export async function POST(request: NextRequest) {
       clientEmail,
       orgId,
       stripeCustomerId,
-      projectIds: [],
+      projectIds: [projectId],
       contractIds: [],
       createdAt: now,
       updatedAt: now,
     }
 
     batch.set(workspaceRef, workspaceDoc)
+    batch.set(
+      projectRef,
+      buildInitialProject({
+        projectId,
+        workspaceId,
+        workspaceName: name,
+        projectType: initialProjectType,
+        clientId,
+        uid,
+        email,
+        now,
+      })
+    )
 
     batch.set(workspaceRef.collection("members").doc(uid), {
       uid,

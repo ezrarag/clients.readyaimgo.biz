@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useAuth } from "@/components/auth/AuthProvider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Dialog,
   DialogContent,
@@ -17,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
 import type {
   BeamContract,
   ContractStatus,
@@ -182,6 +184,7 @@ interface ContractDetailModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onStatusUpdated?: (contractId: string, newStatus: ContractStatus) => void
+  onContractUpdated?: (contract: BeamContract) => void
 }
 
 export function ContractDetailModal({
@@ -190,12 +193,21 @@ export function ContractDetailModal({
   open,
   onOpenChange,
   onStatusUpdated,
+  onContractUpdated,
 }: ContractDetailModalProps) {
   const { user } = useAuth()
   const [statusLoading, setStatusLoading] = useState(false)
   const [statusError, setStatusError] = useState("")
   const [legalReviewLoading, setLegalReviewLoading] = useState(false)
   const [legalReviewError, setLegalReviewError] = useState("")
+  const [proposalAmount, setProposalAmount] = useState("")
+  const [proposalNote, setProposalNote] = useState("")
+  const [proposalCadence, setProposalCadence] =
+    useState<"one-time" | "monthly" | "milestone" | "custom">("one-time")
+  const [proposalPaymentDates, setProposalPaymentDates] = useState("")
+  const [proposalLoading, setProposalLoading] = useState(false)
+  const [proposalError, setProposalError] = useState("")
+  const [proposalSuccess, setProposalSuccess] = useState("")
 
   if (!contract) return null
 
@@ -225,6 +237,103 @@ export function ContractDetailModal({
       setStatusError(err instanceof Error ? err.message : "Unable to update status.")
     } finally {
       setStatusLoading(false)
+    }
+  }
+
+  const refreshContract = async () => {
+    if (!user || !contract) return
+    const token = await user.getIdToken()
+    const res = await fetch(`/api/contracts/${contract.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
+    if (!res.ok) return
+    const body = (await res.json()) as { contract?: BeamContract }
+    if (body.contract) onContractUpdated?.(body.contract)
+  }
+
+  const handleSubmitProposal = async () => {
+    if (!user || !contract) return
+    setProposalError("")
+    setProposalSuccess("")
+    setProposalLoading(true)
+    try {
+      const amount = Number(proposalAmount)
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new Error("Enter a positive amount.")
+      }
+      const token = await user.getIdToken()
+      const res = await fetch(`/api/contracts/${contract.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          amount,
+          cadence: proposalCadence,
+          paymentDates: proposalPaymentDates
+            .split(/\n|,/)
+            .map((item) => item.trim())
+            .filter(Boolean),
+          note: proposalNote,
+        }),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null
+        throw new Error(body?.error || "Unable to submit proposal.")
+      }
+      setProposalSuccess("Financial proposal submitted for admin review.")
+      setProposalAmount("")
+      setProposalNote("")
+      setProposalPaymentDates("")
+      await refreshContract()
+    } catch (err) {
+      setProposalError(err instanceof Error ? err.message : "Unable to submit proposal.")
+    } finally {
+      setProposalLoading(false)
+    }
+  }
+
+  const handleAdminProposalDecision = async (decision: "approved" | "declined") => {
+    if (!user || !contract?.pendingFinancialProposal) return
+    setProposalError("")
+    setProposalSuccess("")
+    setProposalLoading(true)
+    try {
+      const proposal = contract.pendingFinancialProposal
+      const token = await user.getIdToken()
+      const monthlyValue = proposal.cadence === "monthly" ? proposal.amount : contract.monthlyValue
+      const res = await fetch(`/api/contracts/${contract.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          pendingFinancialProposalStatus: decision,
+          ...(decision === "approved"
+            ? {
+                proposedAmount: proposal.amount,
+                pricingCadence: proposal.cadence,
+                paymentDates: proposal.paymentDates,
+                monthlyValue,
+              }
+            : {}),
+        }),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null
+        throw new Error(body?.error || "Unable to update proposal.")
+      }
+      setProposalSuccess(
+        decision === "approved" ? "Financial proposal approved." : "Financial proposal declined."
+      )
+      await refreshContract()
+    } catch (err) {
+      setProposalError(err instanceof Error ? err.message : "Unable to update proposal.")
+    } finally {
+      setProposalLoading(false)
     }
   }
 
@@ -259,7 +368,10 @@ export function ContractDetailModal({
     }
   }
 
-  const hasValue = contract.monthlyValue > 0
+  const proposedAmount = contract.proposedAmount ?? 0
+  const displayValue = contract.monthlyValue > 0 ? contract.monthlyValue : proposedAmount
+  const pricingCadence = contract.pricingCadence ?? "custom"
+  const hasValue = displayValue > 0
   const hasTerm = contract.termMonths > 0
   const annualValue = contract.monthlyValue * 12
   const hasLegalReviews = (contract.legalReviews?.length ?? 0) > 0
@@ -294,13 +406,20 @@ export function ContractDetailModal({
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
                 {hasValue ? (
                   <div className="rounded-2xl border border-border/60 bg-slate-50 px-4 py-3">
-                    <p className="text-xs text-slate-500">Monthly value</p>
+                    <p className="text-xs text-slate-500">
+                      {contract.monthlyValue > 0 ? "Monthly value" : "Proposed amount"}
+                    </p>
                     <p className="mt-1 text-lg font-semibold text-slate-900">
-                      ${contract.monthlyValue.toLocaleString()}
+                      ${displayValue.toLocaleString()}
+                      {contract.monthlyValue <= 0 && pricingCadence ? (
+                        <span className="ml-1 text-xs font-normal text-slate-500">
+                          {pricingCadence}
+                        </span>
+                      ) : null}
                     </p>
                   </div>
                 ) : null}
-                {hasValue ? (
+                {contract.monthlyValue > 0 ? (
                   <div className="rounded-2xl border border-border/60 bg-slate-50 px-4 py-3">
                     <p className="text-xs text-slate-500">Annual value</p>
                     <p className="mt-1 text-lg font-semibold text-slate-900">
@@ -317,6 +436,17 @@ export function ContractDetailModal({
                   </div>
                 ) : null}
               </div>
+
+              {(contract.paymentDates?.length ?? 0) > 0 ? (
+                <div className="rounded-2xl border border-border/60 bg-slate-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                    Payment dates
+                  </p>
+                  <p className="mt-1 text-sm text-slate-700">
+                    {contract.paymentDates!.join(" · ")}
+                  </p>
+                </div>
+              ) : null}
 
               {(contract.startDate || contract.endDate) ? (
                 <div className="flex flex-wrap gap-4 text-sm">
@@ -348,6 +478,109 @@ export function ContractDetailModal({
               ) : null}
             </Section>
           ) : null}
+
+          <Section title="Amount negotiation">
+            {contract.pendingFinancialProposal?.status === "pending" ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold">
+                      Pending proposal: ${contract.pendingFinancialProposal.amount.toLocaleString()}{" "}
+                      ({contract.pendingFinancialProposal.cadence})
+                    </p>
+                    {contract.pendingFinancialProposal.paymentDates.length > 0 ? (
+                      <p className="mt-1 text-xs">
+                        Dates: {contract.pendingFinancialProposal.paymentDates.join(" · ")}
+                      </p>
+                    ) : null}
+                    {contract.pendingFinancialProposal.note ? (
+                      <p className="mt-1 text-xs leading-5">
+                        {contract.pendingFinancialProposal.note}
+                      </p>
+                    ) : null}
+                  </div>
+                  {isAdmin ? (
+                    <div className="flex shrink-0 gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => void handleAdminProposalDecision("approved")}
+                        disabled={proposalLoading}
+                      >
+                        Approve
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void handleAdminProposalDecision("declined")}
+                        disabled={proposalLoading}
+                      >
+                        Decline
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {proposalError ? (
+              <p className="text-sm text-rose-600">{proposalError}</p>
+            ) : null}
+            {proposalSuccess ? (
+              <p className="text-sm text-emerald-700">{proposalSuccess}</p>
+            ) : null}
+
+            {!isAdmin ? (
+              <div className="space-y-3 rounded-2xl border border-border/60 bg-slate-50 px-4 py-3">
+                <div className="grid gap-3 sm:grid-cols-[1fr_160px]">
+                  <Input
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    placeholder="Proposed amount"
+                    value={proposalAmount}
+                    onChange={(event) => setProposalAmount(event.target.value)}
+                  />
+                  <Select
+                    value={proposalCadence}
+                    onValueChange={(value) =>
+                      setProposalCadence(value as typeof proposalCadence)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="one-time">One-time</SelectItem>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="milestone">Milestone</SelectItem>
+                      <SelectItem value="custom">Custom</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Input
+                  placeholder="Payment dates or milestones, comma separated"
+                  value={proposalPaymentDates}
+                  onChange={(event) => setProposalPaymentDates(event.target.value)}
+                />
+                <Textarea
+                  placeholder="Explain the requested cost or payment-date change."
+                  value={proposalNote}
+                  onChange={(event) => setProposalNote(event.target.value)}
+                  rows={3}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void handleSubmitProposal()}
+                  disabled={proposalLoading}
+                >
+                  {proposalLoading ? "Submitting..." : "Submit for admin review"}
+                </Button>
+              </div>
+            ) : null}
+          </Section>
 
           {/* NGOs */}
           {contract.beamNgos.length > 0 ? (

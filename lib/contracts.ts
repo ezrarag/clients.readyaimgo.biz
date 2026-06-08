@@ -75,6 +75,17 @@ export interface FinancialReview {
   supervisorApproved: boolean
 }
 
+export interface ContractFinancialProposal {
+  amount: number
+  cadence: "one-time" | "monthly" | "milestone" | "custom"
+  paymentDates: string[]
+  note: string
+  proposedByUid: string | null
+  proposedByEmail: string | null
+  proposedAt: string | null
+  status: "pending" | "approved" | "declined"
+}
+
 export interface BeamContract {
   id: string
   workspaceId?: string | null
@@ -86,6 +97,7 @@ export interface BeamContract {
   title: string
   summary: string
   monthlyValue: number
+  proposedAmount?: number
   termMonths: number
   startDate: string | null
   endDate: string | null
@@ -95,6 +107,9 @@ export interface BeamContract {
   documentUrl: string | null
   beamNgos: string[]
   notes: string
+  pricingCadence?: "one-time" | "monthly" | "milestone" | "custom"
+  paymentDates?: string[]
+  pendingFinancialProposal?: ContractFinancialProposal | null
   legalReviews?: LegalReview[]
   financialReviews?: FinancialReview[]
 }
@@ -130,6 +145,39 @@ function serializeTs(v: unknown): string | null {
     return (v.toDate() as Date).toISOString()
   }
   return null
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : []
+}
+
+function normalizeCadence(value: unknown): ContractFinancialProposal["cadence"] {
+  return value === "monthly" ||
+    value === "milestone" ||
+    value === "custom" ||
+    value === "one-time"
+    ? value
+    : "custom"
+}
+
+function normalizeFinancialProposal(value: unknown): ContractFinancialProposal | null {
+  if (!isRecord(value)) return null
+  const status =
+    value.status === "approved" || value.status === "declined" || value.status === "pending"
+      ? value.status
+      : "pending"
+  return {
+    amount: readNumber(value.amount),
+    cadence: normalizeCadence(value.cadence),
+    paymentDates: readStringArray(value.paymentDates),
+    note: readString(value.note),
+    proposedByUid: typeof value.proposedByUid === "string" ? value.proposedByUid : null,
+    proposedByEmail: typeof value.proposedByEmail === "string" ? value.proposedByEmail : null,
+    proposedAt: serializeTs(value.proposedAt),
+    status,
+  }
 }
 
 export function normalizeLegalReview(id: string, data: Record<string, unknown>): LegalReview {
@@ -183,6 +231,7 @@ export function normalizeContract(id: string, data: Record<string, unknown>): Be
     title: readString(data.title, "Untitled Agreement"),
     summary: readString(data.summary),
     monthlyValue: readNumber(data.monthlyValue),
+    proposedAmount: readNumber(data.proposedAmount),
     termMonths: readNumber(data.termMonths),
     startDate: serializeTs(data.startDate),
     endDate: serializeTs(data.endDate),
@@ -194,6 +243,9 @@ export function normalizeContract(id: string, data: Record<string, unknown>): Be
       ? data.beamNgos.filter((n): n is string => typeof n === "string")
       : [],
     notes: readString(data.notes),
+    pricingCadence: normalizeCadence(data.pricingCadence),
+    paymentDates: readStringArray(data.paymentDates),
+    pendingFinancialProposal: normalizeFinancialProposal(data.pendingFinancialProposal),
   }
 }
 

@@ -73,6 +73,9 @@ export interface ContractDraft {
   timeline: string
   assumptions: string[]
   clientResponsibilities: string[]
+  proposedAmount: number
+  pricingCadence: "one-time" | "monthly" | "milestone" | "custom"
+  paymentDates: string[]
   paymentTerms: string
   revisionTerms: string
   legalReviewNotes: string
@@ -363,6 +366,9 @@ Using the project context below, produce a structured scope-of-work draft in **v
   "timeline": "string — proposed schedule or milestone structure",
   "assumptions": ["string", "..."],
   "clientResponsibilities": ["string", "..."],
+  "proposedAmount": 0,
+  "pricingCadence": "one-time | monthly | milestone | custom",
+  "paymentDates": ["YYYY-MM-DD or descriptive milestone date", "..."],
   "paymentTerms": "string — structured payment schedule",
   "revisionTerms": "string — revision / change-order policy",
   "legalReviewNotes": "string — flags for legal review; note that this AI draft is not legal advice"
@@ -379,12 +385,44 @@ IMPORTANT RULES:
 7. Reference real repository handles, deployment IDs, line-change counts, project records, modules, or platform configuration only when they appear in the evidence.
 8. Purge generic template placeholders and unrelated examples, including pizza, restaurant, or canned sample project language unless the customer explicitly supplied that context.
 9. Do not invent codebases, deployment logs, municipal endpoints, financial terms, or client obligations that are not supported by the supplied context.
+10. proposedAmount is required and must be a positive numeric estimate in USD. If the customer did not provide a budget, suggest a conservative amount based on the scope and explain the assumption in paymentTerms and legalReviewNotes.
+11. paymentTerms must include the proposedAmount, the pricingCadence, who pays, and when each payment is due. paymentDates must contain at least one date or milestone label.
 
 ---
 
 PROJECT CONTEXT:
 
 ${sections}`
+}
+
+function normalizeCadence(value: unknown): ContractDraft["pricingCadence"] {
+  return value === "monthly" ||
+    value === "milestone" ||
+    value === "custom" ||
+    value === "one-time"
+    ? value
+    : "custom"
+}
+
+function extractFirstUsdAmount(...values: string[]) {
+  for (const value of values) {
+    const match = value.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/)
+    if (!match) continue
+    const parsed = Number(match[1].replace(/,/g, ""))
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+  return 0
+}
+
+function inferTermMonths(draft: ContractDraft) {
+  const text = `${draft.paymentTerms} ${draft.timeline}`.toLowerCase()
+  const monthMatch = text.match(/(\d+)\s*month/)
+  if (monthMatch) {
+    const parsed = Number(monthMatch[1])
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+  if (draft.pricingCadence === "monthly") return 1
+  return 0
 }
 
 // ─── Anthropic API call ───────────────────────────────────────────────────────
@@ -432,8 +470,17 @@ async function generateDraft(prompt: string): Promise<ContractDraft> {
     throw new Error("AI returned malformed JSON. Please try again.")
   }
 
+  const proposedAmount =
+    typeof draft.proposedAmount === "number" && Number.isFinite(draft.proposedAmount)
+      ? draft.proposedAmount
+      : extractFirstUsdAmount(draft.paymentTerms, draft.summary, draft.scopeOfWork)
+
+  if (proposedAmount <= 0) {
+    throw new Error("AI did not return a monetary amount. Add budget context and try again.")
+  }
+
   // Ensure required fields are present with sensible fallbacks
-  return {
+  const normalizedDraft: ContractDraft = {
     title: typeof draft.title === "string" ? draft.title : "Untitled Agreement",
     summary: typeof draft.summary === "string" ? draft.summary : "",
     scopeOfWork: typeof draft.scopeOfWork === "string" ? draft.scopeOfWork : "",
@@ -443,6 +490,11 @@ async function generateDraft(prompt: string): Promise<ContractDraft> {
     clientResponsibilities: Array.isArray(draft.clientResponsibilities)
       ? draft.clientResponsibilities
       : [],
+    proposedAmount,
+    pricingCadence: normalizeCadence(draft.pricingCadence),
+    paymentDates: Array.isArray(draft.paymentDates)
+      ? draft.paymentDates.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : ["Due on agreement approval"],
     paymentTerms: typeof draft.paymentTerms === "string" ? draft.paymentTerms : "",
     revisionTerms: typeof draft.revisionTerms === "string" ? draft.revisionTerms : "",
     legalReviewNotes:
@@ -450,6 +502,12 @@ async function generateDraft(prompt: string): Promise<ContractDraft> {
         ? draft.legalReviewNotes
         : "This AI-generated draft is not legal advice and requires review by qualified legal counsel before execution.",
   }
+
+  if (!normalizedDraft.paymentTerms.includes(String(normalizedDraft.proposedAmount))) {
+    normalizedDraft.paymentTerms = `${normalizedDraft.paymentTerms}\n\nProposed amount: $${normalizedDraft.proposedAmount.toLocaleString("en-US")} (${normalizedDraft.pricingCadence}).`.trim()
+  }
+
+  return normalizedDraft
 }
 
 function collectAdminContractRules(wsData: Record<string, unknown>): string[] {
@@ -610,6 +668,9 @@ export async function POST(request: NextRequest) {
     })
 
     const draft = await generateDraft(prompt)
+    const monthlyValue =
+      draft.pricingCadence === "monthly" ? draft.proposedAmount : 0
+    const termMonths = inferTermMonths(draft)
 
     // ── Persist to Firestore ─────────────────────────────────────────────────
     const now = FieldValue.serverTimestamp()
@@ -637,8 +698,11 @@ export async function POST(request: NextRequest) {
       ]
         .filter(Boolean)
         .join("\n\n"),
-      monthlyValue: 0,
-      termMonths: 0,
+      monthlyValue,
+      termMonths,
+      proposedAmount: draft.proposedAmount,
+      pricingCadence: draft.pricingCadence,
+      paymentDates: draft.paymentDates,
       startDate: null,
       endDate: null,
       documentUrl: null,

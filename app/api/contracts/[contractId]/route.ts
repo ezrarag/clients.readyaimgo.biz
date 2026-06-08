@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { FieldValue } from "firebase-admin/firestore"
 
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
+import { WorkspaceAuthError, assertWorkspaceRole } from "@/lib/workspace-auth"
 import {
   normalizeContract,
   normalizeLegalReview,
@@ -32,6 +33,24 @@ async function isAdmin(uid: string) {
   if (!snap.exists) return false
   const roles = (snap.data() as Record<string, unknown>).roles
   return Array.isArray(roles) && roles.includes("beam-admin")
+}
+
+function readPositiveAmount(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/[$,]/g, ""))
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+  }
+  return null
+}
+
+function normalizeCadence(value: unknown) {
+  return value === "monthly" ||
+    value === "milestone" ||
+    value === "custom" ||
+    value === "one-time"
+    ? value
+    : "custom"
 }
 
 // GET /api/contracts/[contractId]
@@ -161,6 +180,19 @@ export async function PATCH(
     if (typeof body.notes === "string") update.notes = body.notes.trim()
     if (typeof body.documentUrl === "string") update.documentUrl = body.documentUrl.trim() || null
     if (typeof body.monthlyValue === "number") update.monthlyValue = body.monthlyValue
+    if (typeof body.proposedAmount === "number") update.proposedAmount = body.proposedAmount
+    if (typeof body.pricingCadence === "string") update.pricingCadence = normalizeCadence(body.pricingCadence)
+    if (Array.isArray(body.paymentDates)) {
+      update.paymentDates = body.paymentDates.filter(
+        (item): item is string => typeof item === "string" && item.trim().length > 0
+      )
+    }
+    if (body.pendingFinancialProposalStatus === "approved") {
+      update["pendingFinancialProposal.status"] = "approved"
+    }
+    if (body.pendingFinancialProposalStatus === "declined") {
+      update["pendingFinancialProposal.status"] = "declined"
+    }
     if (typeof body.termMonths === "number") update.termMonths = body.termMonths
     if (body.startDate !== undefined) update.startDate = body.startDate || null
     if (body.endDate !== undefined) update.endDate = body.endDate || null
@@ -177,6 +209,101 @@ export async function PATCH(
     console.error("PATCH /api/contracts/[contractId] error:", error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to update contract." },
+      { status: 500 }
+    )
+  }
+}
+
+// POST /api/contracts/[contractId] — submit a financial negotiation proposal.
+export async function POST(
+  req: NextRequest,
+  { params }: { params: { contractId: string } }
+) {
+  try {
+    const decoded = await resolveUser(req)
+    if (!decoded) {
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
+    }
+
+    const { contractId } = params
+    if (!contractId) {
+      return NextResponse.json({ error: "contractId is required." }, { status: 400 })
+    }
+
+    const body = (await req.json()) as Record<string, unknown>
+    const amount = readPositiveAmount(body.amount)
+    if (!amount) {
+      return NextResponse.json({ error: "A positive amount is required." }, { status: 400 })
+    }
+
+    const db = getAdminDb()
+    const snap = await db.collection("contracts").doc(contractId).get()
+    if (!snap.exists) {
+      return NextResponse.json({ error: "Contract not found." }, { status: 404 })
+    }
+
+    const contractData = snap.data() as Record<string, unknown>
+    const admin = await isAdmin(decoded.uid)
+    if (!admin) {
+      const workspaceId =
+        typeof contractData.workspaceId === "string" && contractData.workspaceId.trim()
+          ? contractData.workspaceId.trim()
+          : null
+      if (workspaceId) {
+        await assertWorkspaceRole(db, workspaceId, decoded.uid, "beam-participant")
+      } else {
+        const callerEmail = (decoded.email || "").toLowerCase().trim()
+        const contractEmail = (
+          typeof contractData.clientEmail === "string" ? contractData.clientEmail : ""
+        ).toLowerCase()
+        if (!callerEmail || callerEmail !== contractEmail) {
+          return NextResponse.json({ error: "Access denied." }, { status: 403 })
+        }
+      }
+    }
+
+    const cadence = normalizeCadence(body.cadence)
+    const paymentDates = Array.isArray(body.paymentDates)
+      ? body.paymentDates.filter(
+          (item): item is string => typeof item === "string" && item.trim().length > 0
+        )
+      : []
+    const note =
+      typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 2000) : ""
+    const now = FieldValue.serverTimestamp()
+    const proposal = {
+      amount,
+      cadence,
+      paymentDates,
+      note,
+      proposedByUid: decoded.uid,
+      proposedByEmail: decoded.email ?? null,
+      proposedAt: now,
+      status: "pending",
+    }
+
+    const contractRef = db.collection("contracts").doc(contractId)
+    const proposalRef = contractRef.collection("financialProposals").doc()
+    await db.runTransaction(async (transaction) => {
+      transaction.set(proposalRef, proposal)
+      transaction.set(
+        contractRef,
+        {
+          pendingFinancialProposal: proposal,
+          updatedAt: now,
+        },
+        { merge: true }
+      )
+    })
+
+    return NextResponse.json({ success: true, proposalId: proposalRef.id })
+  } catch (error) {
+    if (error instanceof WorkspaceAuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.status })
+    }
+    console.error("POST /api/contracts/[contractId] error:", error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to submit proposal." },
       { status: 500 }
     )
   }

@@ -111,7 +111,8 @@ interface ContractCardProps {
 }
 
 export function ContractCard({ contract, onViewDetails }: ContractCardProps) {
-  const hasValue = contract.monthlyValue > 0
+  const displayAmount = contract.monthlyValue > 0 ? contract.monthlyValue : contract.proposedAmount ?? 0
+  const hasValue = displayAmount > 0
   const hasTerm = contract.termMonths > 0
   const annualValue = contract.monthlyValue * 12
 
@@ -143,12 +144,18 @@ export function ContractCard({ contract, onViewDetails }: ContractCardProps) {
           <div className="flex flex-wrap gap-4 text-sm">
             {hasValue ? (
               <div>
-                <span className="text-slate-500">Monthly value</span>
+                <span className="text-slate-500">
+                  {contract.monthlyValue > 0 ? "Monthly value" : "Proposed amount"}
+                </span>
                 <p className="font-semibold text-slate-900">
-                  ${contract.monthlyValue.toLocaleString()}
-                  {hasTerm ? (
+                  ${displayAmount.toLocaleString()}
+                  {contract.monthlyValue > 0 && hasTerm ? (
                     <span className="ml-1 text-xs font-normal text-slate-500">
                       / mo · ${annualValue.toLocaleString()} / yr
+                    </span>
+                  ) : contract.monthlyValue <= 0 && contract.pricingCadence ? (
+                    <span className="ml-1 text-xs font-normal text-slate-500">
+                      {contract.pricingCadence}
                     </span>
                   ) : null}
                 </p>
