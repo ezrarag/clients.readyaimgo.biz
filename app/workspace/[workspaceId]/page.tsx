@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
+import { collection, getDocs, limit, orderBy, query } from "firebase/firestore"
 import {
   CheckCircle,
   CalendarDays,
@@ -56,7 +57,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { HelpMark } from "@/components/ui/help-mark"
 import { ContractCard } from "@/components/contracts/ContractCard"
 import { ContractDetailModal } from "@/components/contracts/ContractDetailModal"
-import { getStorageInstance } from "@/lib/firebase/config"
+import { getDb, getStorageInstance } from "@/lib/firebase/config"
 import { signOut } from "@/lib/firebase/auth"
 import type { BeamContract } from "@/lib/contracts"
 import type { InfrastructureLink } from "@/lib/infrastructure-links"
@@ -237,6 +238,13 @@ interface WorkspaceProjectTask {
   dueDate?: string
   source?: string
   createdByEmail?: string
+}
+
+interface StatusVideoUpdate {
+  id: string
+  title: string
+  videoUrl: string
+  aiSummary: string[]
 }
 
 interface CorrespondenceItem {
@@ -1011,6 +1019,23 @@ function statusTone(status?: string) {
   return "bg-slate-100 text-slate-600"
 }
 
+function normalizeAiSummary(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter(Boolean)
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(/\n|•|-/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+
+  return []
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function WorkspacePage() {
@@ -1040,6 +1065,8 @@ export default function WorkspacePage() {
   const [selectedContract, setSelectedContract] = useState<BeamContract | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [files, setFiles] = useState<WorkspaceFile[]>([])
+  const [statusVideos, setStatusVideos] = useState<StatusVideoUpdate[]>([])
+  const [statusVideosLoading, setStatusVideosLoading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -1303,6 +1330,59 @@ export default function WorkspacePage() {
       void load()
     }
   }, [authLoading, load, router, user])
+
+  useEffect(() => {
+    const clientId = workspace?.clientId?.trim()
+    if (!user || !clientId) {
+      setStatusVideos([])
+      setStatusVideosLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setStatusVideosLoading(true)
+
+    const loadStatusVideos = async () => {
+      try {
+        const snapshot = await getDocs(
+          query(
+            collection(getDb(), "clients", clientId, "statusVideos"),
+            orderBy("createdAt", "desc"),
+            limit(10)
+          )
+        )
+        if (cancelled) return
+
+        setStatusVideos(
+          snapshot.docs
+            .map((docSnap) => {
+              const data = docSnap.data() as Record<string, unknown>
+              const videoUrl = typeof data.videoUrl === "string" ? data.videoUrl.trim() : ""
+              return {
+                id: docSnap.id,
+                title:
+                  (typeof data.title === "string" && data.title.trim()) ||
+                  "ReadyAimGo Build Update",
+                videoUrl,
+                aiSummary: normalizeAiSummary(data.aiSummary),
+              }
+            })
+            .filter((item) => item.videoUrl)
+        )
+      } catch (err) {
+        console.warn("Unable to load status videos:", err)
+        if (!cancelled) setStatusVideos([])
+      } finally {
+        if (!cancelled) setStatusVideosLoading(false)
+      }
+    }
+
+    void loadStatusVideos()
+
+    return () => {
+      cancelled = true
+    }
+  }, [user, workspace?.clientId])
 
   useEffect(() => {
     if (!user || !selectedProjectId) {
@@ -2204,6 +2284,15 @@ export default function WorkspacePage() {
           <TabsTrigger value="payments">
             <CreditCard className="mr-2 h-4 w-4" />
             Retainer
+          </TabsTrigger>
+          <TabsTrigger value="updates">
+            <Sparkles className="mr-2 h-4 w-4" />
+            Updates
+            {statusVideos.length > 0 && (
+              <span className="ml-1.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                {statusVideos.length}
+              </span>
+            )}
           </TabsTrigger>
           {!HIDDEN_WORKSPACE_TABS.has("deliverables") ? (
             <TabsTrigger value="deliverables">
@@ -3677,6 +3766,51 @@ export default function WorkspacePage() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+        </TabsContent>
+
+        {/* ── Build Updates ── */}
+        <TabsContent value="updates">
+          <div className="space-y-4">
+            {statusVideosLoading ? (
+              <Card>
+                <CardContent className="flex items-center justify-center py-12 text-sm text-slate-500">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Loading build updates...
+                </CardContent>
+              </Card>
+            ) : statusVideos.length === 0 ? (
+              <Card>
+                <CardContent className="flex items-center justify-center py-12 text-center text-sm text-slate-500">
+                  Build updates from your ReadyAimGo team will appear here.
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-2">
+                {statusVideos.map((update) => (
+                  <Card key={update.id} className="overflow-hidden">
+                    <CardHeader>
+                      <CardTitle>{update.title}</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <video
+                        className="w-full rounded-2xl border border-border bg-slate-950"
+                        controls
+                        preload="metadata"
+                        src={update.videoUrl}
+                      />
+                      {update.aiSummary.length > 0 ? (
+                        <ul className="list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
+                          {update.aiSummary.map((item, index) => (
+                            <li key={`${update.id}-summary-${index}`}>{item}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
         </TabsContent>
 
         {/* ── Files ── */}

@@ -71,6 +71,17 @@ const STAFF_ROLES: BeamRole[] = [
   "client-manager",
 ]
 
+function isAuthFlowRoute(pathname: string) {
+  return (
+    pathname === "/auth" ||
+    pathname.startsWith("/auth/") ||
+    pathname === "/login" ||
+    pathname.startsWith("/login/") ||
+    pathname === "/signup" ||
+    pathname.startsWith("/signup/")
+  )
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
@@ -138,11 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     ) => {
       const isClaimRoute =
         pathname === "/claim-workspace" || pathname.startsWith("/claim-workspace/")
-      const isAuthRoute =
-        pathname === "/login" ||
-        pathname.startsWith("/login/") ||
-        pathname === "/signup" ||
-        pathname.startsWith("/signup/")
+      const isAuthRoute = isAuthFlowRoute(pathname)
       const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/")
       const isDashboardRoute = pathname === "/dashboard" || pathname.startsWith("/dashboard/")
       const isDebugRoute = pathname === "/debug" || pathname.startsWith("/debug/")
@@ -365,11 +372,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         const isClaimRoute =
           pathname === "/claim-workspace" || pathname.startsWith("/claim-workspace/")
-        const isAuthRoute =
-          pathname === "/login" ||
-          pathname.startsWith("/login/") ||
-          pathname === "/signup" ||
-          pathname.startsWith("/signup/")
+        const isAuthRoute = isAuthFlowRoute(pathname)
         const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/")
         const isDashboardRoute = pathname === "/dashboard" || pathname.startsWith("/dashboard/")
         const isDebugRoute = pathname === "/debug" || pathname.startsWith("/debug/")
