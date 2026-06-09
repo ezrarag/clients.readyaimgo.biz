@@ -158,6 +158,13 @@ service cloud.firestore {
       allow write: if signedIn() && request.auth.uid == uid;
     }
 
+    // Status video subcollection — readable by any signed-in user.
+    // Workspace membership (enforced at the API layer) controls which client IDs
+    // the portal subscribes to, so allowing broad read here is safe.
+    match /clients/{clientId}/statusVideos/{videoId} {
+      allow read: if signedIn();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

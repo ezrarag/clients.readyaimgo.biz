@@ -9,6 +9,7 @@ import {
   resolveWorkspaceContext,
 } from "@/lib/workspace-auth"
 import { normalizeWorkspace, parseWorkspaceRole } from "@/lib/workspaces"
+import { applyWorkspacePurgePlan, buildWorkspacePurgePlan } from "@/lib/workspace-purge"
 
 export const dynamic = "force-dynamic"
 
@@ -368,9 +369,8 @@ export async function PATCH(
 
 // ─── DELETE /api/workspaces/[workspaceId] ────────────────────────────────────
 //
-// Owner-only. Deletes the workspace document and all subcollections
-// (members, pendingInvites), and removes the workspaceId from every member's
-// users/{uid}.workspaceIds array.
+// Owner-only. Purges workspace document/subcollections, workspace-scoped
+// project/task records, and references from users, clients, and ragAllowlist.
 
 export async function DELETE(
   request: NextRequest,
@@ -388,51 +388,23 @@ export async function DELETE(
       await assertWorkspaceRole(db, params.workspaceId, decodedToken.uid, "owner")
     }
 
-    const workspaceRef = db.collection("workspaces").doc(params.workspaceId)
-    const workspaceSnap = await workspaceRef.get()
-    if (!workspaceSnap.exists) {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const confirmWorkspaceId = typeof body.confirmWorkspaceId === "string" ? body.confirmWorkspaceId.trim() : ""
+    if (confirmWorkspaceId !== params.workspaceId) {
+      return NextResponse.json(
+        { error: "confirmWorkspaceId must match the workspace being purged." },
+        { status: 400 }
+      )
+    }
+
+    const plan = await buildWorkspacePurgePlan(db, params.workspaceId, false)
+    if (!plan.workspaceExists) {
       return NextResponse.json({ error: "Workspace not found." }, { status: 404 })
     }
 
-    // Collect all members so we can remove the workspaceId from their user docs
-    const membersSnap = await workspaceRef.collection("members").get()
-    const pendingSnap = await workspaceRef.collection("pendingInvites").get()
+    await applyWorkspacePurgePlan(db, plan)
 
-    const now = FieldValue.serverTimestamp()
-
-    // Firestore batches are limited to 500 ops — chunk if necessary
-    const memberUids = membersSnap.docs.map((d) => d.id)
-    const allDeletes = [
-      ...membersSnap.docs.map((d) => d.ref),
-      ...pendingSnap.docs.map((d) => d.ref),
-      workspaceRef,
-    ]
-
-    // Batch-delete workspace + subcollections
-    const BATCH_SIZE = 490
-    for (let i = 0; i < allDeletes.length; i += BATCH_SIZE) {
-      const batch = db.batch()
-      allDeletes.slice(i, i + BATCH_SIZE).forEach((ref) => batch.delete(ref))
-      await batch.commit()
-    }
-
-    // Remove workspaceId from each member's user doc
-    for (let i = 0; i < memberUids.length; i += BATCH_SIZE) {
-      const batch = db.batch()
-      memberUids.slice(i, i + BATCH_SIZE).forEach((uid) => {
-        batch.set(
-          db.collection("users").doc(uid),
-          {
-            workspaceIds: FieldValue.arrayRemove(params.workspaceId),
-            updatedAt: now,
-          },
-          { merge: true }
-        )
-      })
-      await batch.commit()
-    }
-
-    return NextResponse.json({ success: true, deleted: params.workspaceId })
+    return NextResponse.json({ success: true, deleted: params.workspaceId, purge: plan })
   } catch (error) {
     if (error instanceof WorkspaceAuthError) {
       return NextResponse.json({ error: error.message }, { status: error.status })

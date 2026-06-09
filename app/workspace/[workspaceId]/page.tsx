@@ -1178,6 +1178,7 @@ export default function WorkspacePage() {
   const [showEcosystemSearch, setShowEcosystemSearch] = useState(false)
   const [savingHosting, setSavingHosting] = useState(false)
   const [savingConnectors, setSavingConnectors] = useState(false)
+  const [purgingWorkspace, setPurgingWorkspace] = useState(false)
   const [githubMeta, setGithubMeta] = useState<ConnectorMeta | null>(null)
   const [vercelMeta, setVercelMeta] = useState<ConnectorMeta | null>(null)
   const [hostingDiagnostics, setHostingDiagnostics] = useState<HostingAnalyzeDiagnostics | null>(null)
@@ -2140,6 +2141,34 @@ export default function WorkspacePage() {
       setError(err instanceof Error ? err.message : "Unable to save workspace connectors.")
     } finally {
       setSavingConnectors(false)
+    }
+  }
+
+  const purgeCurrentWorkspace = async () => {
+    if (!user || !workspace || !canManageWorkspace) return
+    const confirmed = window.confirm(
+      [
+        `Purge workspace "${workspace.id}"?`,
+        "",
+        "This deletes the workspace record, workspace projects/tasks, members, invites, and workspace links from user/client access records.",
+        "",
+        "This cannot be undone from the client portal.",
+      ].join("\n")
+    )
+    if (!confirmed) return
+
+    setPurgingWorkspace(true)
+    setError(null)
+    try {
+      await apiFetch<{ success: true }>(user, `/api/workspaces/${params.workspaceId}`, {
+        method: "DELETE",
+        body: JSON.stringify({ confirmWorkspaceId: workspace.id }),
+      })
+      router.replace("/dashboard")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to purge workspace.")
+    } finally {
+      setPurgingWorkspace(false)
     }
   }
 
@@ -5155,6 +5184,35 @@ export default function WorkspacePage() {
                 </div>
               </div>
             </section>
+
+            {canManageWorkspace ? (
+              <section className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-500">
+                  Danger Zone
+                </p>
+                <div className="rounded-2xl border border-red-200 bg-red-50/70 p-4">
+                  <p className="text-sm font-medium text-red-900">Purge this workspace</p>
+                  <p className="mt-1 text-xs leading-5 text-red-700">
+                    Deletes this workspace, its workspace-scoped projects/tasks, member records,
+                    invites, and access links from client/user records.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-3 border-red-300 text-red-700 hover:bg-red-100"
+                    onClick={() => void purgeCurrentWorkspace()}
+                    disabled={purgingWorkspace}
+                  >
+                    {purgingWorkspace ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="mr-2 h-4 w-4" />
+                    )}
+                    {purgingWorkspace ? "Purging..." : "Purge Workspace"}
+                  </Button>
+                </div>
+              </section>
+            ) : null}
           </div>
 
           <DialogFooter>
