@@ -257,6 +257,10 @@ interface StatusVideoUpdate {
   createdAt: unknown
 }
 
+interface StatusVideosResponse {
+  statusVideos: Array<Record<string, unknown> & { id: string }>
+}
+
 interface CorrespondenceItem {
   id: string
   kind: "email" | "event"
@@ -521,6 +525,30 @@ function classifyStatusVideoType(data: Record<string, unknown>, fallback: AssetP
     return "webdev"
   }
   return fallback
+}
+
+function normalizeStatusVideoUpdate(
+  id: string,
+  data: Record<string, unknown>,
+  fallback: AssetProjectType
+): StatusVideoUpdate | null {
+  const videoUrl =
+    cleanDisplayValue(data.videoUrl as string | null | undefined) ||
+    cleanDisplayValue(data.downloadUrl as string | null | undefined) ||
+    cleanDisplayValue(data.url as string | null | undefined) ||
+    cleanDisplayValue(data.publicUrl as string | null | undefined)
+  if (!videoUrl) return null
+
+  return {
+    id,
+    title:
+      (typeof data.title === "string" && data.title.trim()) ||
+      "ReadyAimGo Build Update",
+    videoUrl,
+    aiSummary: normalizeAiSummary(data.aiSummary ?? data.summary),
+    assetProjectType: classifyStatusVideoType(data, fallback),
+    createdAt: data.createdAt ?? null,
+  }
 }
 
 function fleetIdsForProject(project: WorkspaceProject) {
@@ -1391,13 +1419,41 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     const clientId = workspace?.clientId?.trim()
-    if (!user || !clientId) {
+    if (!user || !workspace) {
       setStatusVideos([])
       setStatusVideosLoading(false)
       return
     }
 
+    setStatusVideos([])
     setStatusVideosLoading(true)
+
+    let cancelled = false
+    apiFetch<StatusVideosResponse>(
+      user,
+      `/api/workspaces/${encodeURIComponent(params.workspaceId)}/status-videos`
+    )
+      .then((payload) => {
+        if (cancelled) return
+        setStatusVideos(
+          payload.statusVideos
+            .map((video) => normalizeStatusVideoUpdate(video.id, video, dominantType))
+            .filter((video): video is StatusVideoUpdate => Boolean(video))
+        )
+      })
+      .catch((err) => {
+        console.warn("Unable to load server-resolved status videos:", err)
+        if (!cancelled) setStatusVideos([])
+      })
+      .finally(() => {
+        if (!cancelled) setStatusVideosLoading(false)
+      })
+
+    if (!clientId) {
+      return () => {
+        cancelled = true
+      }
+    }
 
     const unsubscribe = onSnapshot(
       query(
@@ -1406,35 +1462,38 @@ export default function WorkspacePage() {
         limit(10)
       ),
       (snapshot) => {
-        setStatusVideos(
-          snapshot.docs
-            .map((docSnap) => {
-              const data = docSnap.data() as Record<string, unknown>
-              const videoUrl = typeof data.videoUrl === "string" ? data.videoUrl.trim() : ""
-              return {
-                id: docSnap.id,
-                title:
-                  (typeof data.title === "string" && data.title.trim()) ||
-                  "ReadyAimGo Build Update",
-                videoUrl,
-                aiSummary: normalizeAiSummary(data.aiSummary),
-                assetProjectType: classifyStatusVideoType(data, dominantType),
-                createdAt: data.createdAt ?? null,
-              }
-            })
-            .filter((item) => item.videoUrl)
-        )
-        setStatusVideosLoading(false)
+        const liveVideos = snapshot.docs
+          .map((docSnap) =>
+            normalizeStatusVideoUpdate(
+              docSnap.id,
+              docSnap.data() as Record<string, unknown>,
+              dominantType
+            )
+          )
+          .filter((item): item is StatusVideoUpdate => Boolean(item))
+
+        if (liveVideos.length > 0) {
+          setStatusVideos(
+            liveVideos.sort(
+              (a, b) =>
+                (dateFromUnknown(b.createdAt)?.getTime() ?? 0) -
+                (dateFromUnknown(a.createdAt)?.getTime() ?? 0)
+            )
+          )
+          setStatusVideosLoading(false)
+        }
       },
       (err) => {
         console.warn("Unable to load status videos:", err)
-        setStatusVideos([])
         setStatusVideosLoading(false)
       }
     )
 
-    return unsubscribe
-  }, [dominantType, user, workspace?.clientId])
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [dominantType, params.workspaceId, user, workspace])
 
   useEffect(() => {
     const clientId = workspace?.clientId?.trim()
