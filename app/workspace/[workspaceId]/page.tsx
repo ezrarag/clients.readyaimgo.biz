@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { collection, getDocs, limit, orderBy, query } from "firebase/firestore"
+import { collection, doc, getDoc, limit, onSnapshot, orderBy, query } from "firebase/firestore"
 import {
   CheckCircle,
   CalendarDays,
@@ -59,6 +59,7 @@ import { ContractCard } from "@/components/contracts/ContractCard"
 import { ContractDetailModal } from "@/components/contracts/ContractDetailModal"
 import { getDb, getStorageInstance } from "@/lib/firebase/config"
 import { signOut } from "@/lib/firebase/auth"
+import { CLIENT_SERVICE_OPTIONS } from "@/lib/client-onboarding"
 import type { BeamContract } from "@/lib/contracts"
 import type { InfrastructureLink } from "@/lib/infrastructure-links"
 import {
@@ -253,6 +254,7 @@ interface StatusVideoUpdate {
   videoUrl: string
   aiSummary: string[]
   assetProjectType: AssetProjectType
+  createdAt: unknown
 }
 
 interface CorrespondenceItem {
@@ -932,6 +934,22 @@ function workspaceBusinessReference(workspace: Workspace) {
   )
 }
 
+function externalHref(value: string | null | undefined) {
+  const clean = cleanDisplayValue(value)
+  if (!clean) return ""
+  return clean.startsWith("http://") || clean.startsWith("https://") ? clean : `https://${clean}`
+}
+
+function clientServiceLabels(clientRecord: Record<string, unknown> | null) {
+  const interests = Array.isArray(clientRecord?.serviceInterests)
+    ? clientRecord.serviceInterests.filter((item): item is string => typeof item === "string")
+    : []
+  const labelById = new Map<string, string>(
+    CLIENT_SERVICE_OPTIONS.map((option) => [option.id, option.label])
+  )
+  return Array.from(new Set(interests)).map((id) => labelById.get(id) ?? id)
+}
+
 function roleDisplayLabel(role: WorkspaceRole) {
   if (role === "employee-of-client") return "employee"
   return role
@@ -1115,6 +1133,9 @@ export default function WorkspacePage() {
   const [activeTab, setActiveTab] = useState("projects")
   // AI contract draft dialog
   const [draftDialogOpen, setDraftDialogOpen] = useState(false)
+  const [accountInfoOpen, setAccountInfoOpen] = useState(false)
+  const [clientRecord, setClientRecord] = useState<Record<string, unknown> | null>(null)
+  const [clientRecordLoading, setClientRecordLoading] = useState(false)
   const [draftForm, setDraftForm] = useState<DraftFormState>(DRAFT_FORM_DEFAULTS)
   const [drafting, setDrafting] = useState(false)
   const [draftResult, setDraftResult] = useState<GeneratedDraft | null>(null)
@@ -1155,6 +1176,19 @@ export default function WorkspacePage() {
     [members, user?.uid]
   )
   const canManageWorkspace = currentMember?.role === "owner" || currentMember?.role === "developer"
+  const joinMeetingProvider = useMemo(() => {
+    const providers =
+      meetingProviders.length > 0 ? meetingProviders : workspace?.meetingProviders ?? []
+    return (
+      providers.find((provider) => provider.enabled && provider.isDefault && provider.meetingBaseUrl) ??
+      providers.find((provider) => provider.enabled && provider.meetingBaseUrl) ??
+      null
+    )
+  }, [meetingProviders, workspace?.meetingProviders])
+  const accountServiceLabels = useMemo(
+    () => clientServiceLabels(clientRecord),
+    [clientRecord]
+  )
 
   const filteredRepos = useMemo(() => {
     const q = repoQuery.toLowerCase()
@@ -1363,20 +1397,15 @@ export default function WorkspacePage() {
       return
     }
 
-    let cancelled = false
     setStatusVideosLoading(true)
 
-    const loadStatusVideos = async () => {
-      try {
-        const snapshot = await getDocs(
-          query(
-            collection(getDb(), "clients", clientId, "statusVideos"),
-            orderBy("createdAt", "desc"),
-            limit(10)
-          )
-        )
-        if (cancelled) return
-
+    const unsubscribe = onSnapshot(
+      query(
+        collection(getDb(), "clients", clientId, "statusVideos"),
+        orderBy("createdAt", "desc"),
+        limit(10)
+      ),
+      (snapshot) => {
         setStatusVideos(
           snapshot.docs
             .map((docSnap) => {
@@ -1390,24 +1419,50 @@ export default function WorkspacePage() {
                 videoUrl,
                 aiSummary: normalizeAiSummary(data.aiSummary),
                 assetProjectType: classifyStatusVideoType(data, dominantType),
+                createdAt: data.createdAt ?? null,
               }
             })
             .filter((item) => item.videoUrl)
         )
-      } catch (err) {
+        setStatusVideosLoading(false)
+      },
+      (err) => {
         console.warn("Unable to load status videos:", err)
-        if (!cancelled) setStatusVideos([])
-      } finally {
-        if (!cancelled) setStatusVideosLoading(false)
+        setStatusVideos([])
+        setStatusVideosLoading(false)
       }
+    )
+
+    return unsubscribe
+  }, [dominantType, user, workspace?.clientId])
+
+  useEffect(() => {
+    const clientId = workspace?.clientId?.trim()
+    if (!accountInfoOpen || !clientId) {
+      if (!clientId) setClientRecord(null)
+      setClientRecordLoading(false)
+      return
     }
 
-    void loadStatusVideos()
+    let cancelled = false
+    setClientRecordLoading(true)
+    getDoc(doc(getDb(), "clients", clientId))
+      .then((snapshot) => {
+        if (cancelled) return
+        setClientRecord(snapshot.exists() ? (snapshot.data() as Record<string, unknown>) : null)
+      })
+      .catch((err) => {
+        console.warn("Unable to load client account info:", err)
+        if (!cancelled) setClientRecord(null)
+      })
+      .finally(() => {
+        if (!cancelled) setClientRecordLoading(false)
+      })
 
     return () => {
       cancelled = true
     }
-  }, [dominantType, user, workspace?.clientId])
+  }, [accountInfoOpen, workspace?.clientId])
 
   useEffect(() => {
     if (!user || !selectedProjectId) {
@@ -2224,7 +2279,11 @@ export default function WorkspacePage() {
     <AppShell
       eyebrow="Workspace"
       title={workspace.name}
-      description={`${projectCards.length} child project${projectCards.length !== 1 ? "s" : ""} · ${members.length} member${members.length !== 1 ? "s" : ""} · ${workspace.repos.length} repo${workspace.repos.length !== 1 ? "s" : ""}`}
+      description={
+        workspace.primaryDomain ??
+        workspace.clientId ??
+        workspaceBusinessReference(workspace)
+      }
       nav={[
         { href: "/dashboard", label: "Workspaces" },
         { href: `/workspace/${workspace.id}`, label: workspace.name, active: true },
@@ -2234,6 +2293,30 @@ export default function WorkspacePage() {
           <LogOut className="mr-2 h-4 w-4" />
           Sign Out
         </Button>
+      }
+      intro={
+        <div className="flex flex-wrap gap-2 lg:justify-end">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setAccountInfoOpen(true)}
+          >
+            Account info
+          </Button>
+          {joinMeetingProvider?.meetingBaseUrl ? (
+            <Button asChild size="sm" variant="ghost">
+              <a
+                href={externalHref(joinMeetingProvider.meetingBaseUrl)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <CalendarDays className="mr-2 h-4 w-4" />
+                Join meeting
+              </a>
+            </Button>
+          ) : null}
+        </div>
       }
     >
       {error && (
@@ -3843,7 +3926,16 @@ export default function WorkspacePage() {
                   <Card key={update.id} className="overflow-hidden">
                     <CardHeader>
                       <div className="flex flex-wrap items-start justify-between gap-3">
-                        <CardTitle>{update.title}</CardTitle>
+                        <div>
+                          <CardTitle>{update.title}</CardTitle>
+                          <p className="mt-1 text-xs text-slate-400">
+                            {formatSafeDate(
+                              update.createdAt,
+                              { month: "short", day: "numeric", year: "numeric" },
+                              "Date pending"
+                            )}
+                          </p>
+                        </div>
                         <Badge variant="secondary">
                           {assetProjectTypeLabel(update.assetProjectType)}
                         </Badge>
@@ -4796,6 +4888,145 @@ export default function WorkspacePage() {
               </div>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={accountInfoOpen} onOpenChange={setAccountInfoOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Account information</DialogTitle>
+            <DialogDescription>
+              Business and contact details for this workspace.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-5">
+            <section className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                Business
+              </p>
+              <div className="space-y-2 rounded-2xl border border-border bg-slate-50/70 p-4 text-sm">
+                <div className="flex justify-between gap-4">
+                  <span className="text-slate-500">Business name</span>
+                  <span className="text-right font-medium text-slate-900">
+                    {workspaceBusinessReference(workspace)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-slate-500">Client ID</span>
+                  <span className="flex min-w-0 items-center justify-end gap-2">
+                    <span className="truncate font-mono text-xs text-slate-800">
+                      {workspace.clientId ?? "N/A"}
+                    </span>
+                    {workspace.clientId ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          void navigator.clipboard.writeText(workspace.clientId ?? "")
+                        }
+                      >
+                        Copy
+                      </Button>
+                    ) : null}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-slate-500">Primary domain</span>
+                  <span className="text-right font-medium text-slate-900">
+                    {workspace.primaryDomain ?? workspace.targetDomain ?? "N/A"}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-slate-500">Org ID</span>
+                  <span className="text-right font-mono text-xs text-slate-800">
+                    {workspace.orgId ?? "N/A"}
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <section className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                Contact
+              </p>
+              <div className="rounded-2xl border border-border bg-white/80 p-4 text-sm">
+                <div className="flex justify-between gap-4">
+                  <span className="text-slate-500">Account email</span>
+                  <span className="text-right font-medium text-slate-900">
+                    {workspace.clientEmail ?? workspace.registrationEmail ?? "N/A"}
+                  </span>
+                </div>
+              </div>
+            </section>
+
+            <section className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                Services
+              </p>
+              <div className="rounded-2xl border border-border bg-white/80 p-4">
+                {clientRecordLoading ? (
+                  <div className="flex items-center text-sm text-slate-500">
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Loading services...
+                  </div>
+                ) : accountServiceLabels.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {accountServiceLabels.map((label) => (
+                      <Badge key={label} variant="default">
+                        {label}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">N/A</p>
+                )}
+              </div>
+            </section>
+
+            <section className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                Workspace
+              </p>
+              <div className="space-y-2 rounded-2xl border border-border bg-slate-50/70 p-4 text-xs">
+                <div className="flex justify-between gap-4">
+                  <span className="text-slate-500">Vercel team</span>
+                  <span className="text-right font-mono text-slate-800">
+                    {workspace.vercelTeamId ?? "N/A"}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-slate-500">GitHub org</span>
+                  <span className="text-right font-mono text-slate-800">
+                    {workspace.githubOrg ?? "N/A"}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-slate-500">Stripe customer</span>
+                  <span className="text-right font-mono text-slate-800">
+                    {workspace.stripeCustomerId ?? "N/A"}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-slate-500">Member count</span>
+                  <span className="text-right font-mono text-slate-800">
+                    {workspace.memberCount}
+                  </span>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setAccountInfoOpen(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </AppShell>
