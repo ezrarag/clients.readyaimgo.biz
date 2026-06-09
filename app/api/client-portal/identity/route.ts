@@ -3,6 +3,7 @@ import { FieldValue } from "firebase-admin/firestore"
 
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
 import { CLIENT_SERVICE_OPTIONS } from "@/lib/client-onboarding"
+import { normalizePhoneToE164 } from "@/lib/phone"
 import { emailToDocId, getBearerToken, resolvePortalIdentity } from "@/lib/portal-auth"
 
 export const dynamic = "force-dynamic"
@@ -196,7 +197,7 @@ export async function PATCH(request: NextRequest) {
     for (const fieldName of profileFields) {
       const value = readProfileString(body, fieldName)
       if (value !== undefined) {
-        updates[fieldName] = value
+        updates[fieldName] = fieldName === "phone" ? normalizePhoneToE164(value) : value
       }
     }
 
@@ -212,8 +213,10 @@ export async function PATCH(request: NextRequest) {
       )
     }
 
+    const db = getAdminDb()
+
     if (Object.keys(updates).length > 0) {
-      await getAdminDb().collection("clients").doc(identity.activeClientId).set(
+      await db.collection("clients").doc(identity.activeClientId).set(
         {
           ...updates,
           updatedAt: FieldValue.serverTimestamp(),
@@ -221,8 +224,19 @@ export async function PATCH(request: NextRequest) {
         { merge: true }
       )
     } else {
-      await getAdminDb().collection("clients").doc(identity.activeClientId).set(
+      await db.collection("clients").doc(identity.activeClientId).set(
         {
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      )
+    }
+
+    if (typeof updates.phone === "string") {
+      await db.collection("clientComms").doc(identity.activeClientId).set(
+        {
+          clientId: identity.activeClientId,
+          phone: updates.phone,
           updatedAt: FieldValue.serverTimestamp(),
         },
         { merge: true }

@@ -283,6 +283,24 @@ function SignUpPageContent() {
     })
   }
 
+  const syncPortalPhone = async (
+    accountUser: NonNullable<Awaited<ReturnType<typeof signUp>>["user"]>
+  ) => {
+    if (!phone.trim()) return
+
+    const token = await accountUser.getIdToken()
+    await fetch("/api/client-portal/identity", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ phone }),
+    }).catch((error) => {
+      console.warn("Non-fatal phone sync failed after onboarding:", error)
+    })
+  }
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
     setError("")
@@ -296,6 +314,7 @@ function SignUpPageContent() {
 
       const firestoreDb = getDb()
       await persistAccount(result.user)
+      await syncPortalPhone(result.user)
       await notifySlack(result.user.email || email, name || companyName || "User")
       const destination = await resolveClientDestination(
         firestoreDb,
@@ -331,6 +350,7 @@ function SignUpPageContent() {
       await bootstrapAdminClientRecord(result.user)
       try {
         await persistAccount(result.user)
+        await syncPortalPhone(result.user)
       } catch (persistError) {
         console.warn("Non-fatal browser onboarding write failed after bootstrap:", persistError)
       }

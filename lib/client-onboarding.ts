@@ -8,6 +8,8 @@ import {
   type Firestore,
 } from "firebase/firestore"
 
+import { normalizePhoneToE164 } from "@/lib/phone"
+
 export const CLIENT_SERVICE_OPTIONS = [
   {
     id: "web",
@@ -224,6 +226,12 @@ export async function upsertClientAccountRecord({
     handoff?.contactName ||
     (typeof existing?.name === "string" ? existing.name : "")
 
+  const normalizedPhone = normalizePhoneToE164(
+    onboarding.phone.trim() ||
+      handoff?.phone ||
+      (typeof existing?.phone === "string" ? existing.phone : null)
+  )
+
   const batch = writeBatch(firestoreDb)
 
   batch.set(
@@ -243,10 +251,7 @@ export async function upsertClientAccountRecord({
         onboarding.contactTitle.trim() ||
         handoff?.role ||
         (typeof existing?.contactTitle === "string" ? existing.contactTitle : null),
-      phone:
-        onboarding.phone.trim() ||
-        handoff?.phone ||
-        (typeof existing?.phone === "string" ? existing.phone : null),
+      phone: normalizedPhone || null,
       organizationType:
         onboarding.organizationType.trim() ||
         handoff?.organizationType ||
