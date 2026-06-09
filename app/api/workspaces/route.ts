@@ -29,6 +29,21 @@ function readString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function readStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : []
+}
+
 function workspaceNameSlug(data: Record<string, unknown>) {
   const name =
     readString(data.workspaceName) ||
@@ -37,6 +52,124 @@ function workspaceNameSlug(data: Record<string, unknown>) {
     readString(data.name) ||
     ""
   return slugifyWorkspaceName(name)
+}
+
+function stripGeneratedSuffix(slug: string) {
+  const match = slug.match(/^(.+)-[a-z0-9]{5}$/)
+  return match?.[1] ? match[1] : slug
+}
+
+function normalizeDomain(value: string | null) {
+  if (!value) return null
+  const withoutProtocol = value.replace(/^https?:\/\//i, "").split("/")[0] ?? ""
+  const normalized = withoutProtocol.replace(/^www\./i, "").trim().toLowerCase()
+  return normalized || null
+}
+
+function normalizeRepo(value: string | null) {
+  if (!value) return null
+  return (
+    value
+      .replace(/^https?:\/\/github\.com\//i, "")
+      .replace(/\.git$/i, "")
+      .trim()
+      .toLowerCase() || null
+  )
+}
+
+function unique(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))))
+}
+
+function workspaceIsArchived(data: Record<string, unknown>) {
+  return readString(data.status) === "archived" || Boolean(readString(data.archivedDuplicateOf))
+}
+
+function collectDomains(data: Record<string, unknown>) {
+  const hosting = asRecord(data.hosting)
+  const registrarDomains = Array.isArray(hosting.domainRegistrars)
+    ? hosting.domainRegistrars.flatMap((item) => [readString(asRecord(item).domain)])
+    : []
+  const staticHosts = Array.isArray(hosting.staticHosts)
+    ? hosting.staticHosts.flatMap((item) => [readString(asRecord(item).productionUrl)])
+    : []
+  const vercelDomains = Array.isArray(data.vercelProjects)
+    ? data.vercelProjects.flatMap((project) => readStringArray(asRecord(project).domains))
+    : []
+
+  return unique(
+    [
+      readString(data.primaryDomain),
+      readString(data.targetDomain),
+      readString(data.productionUrl),
+      readString(data.websiteUrl),
+      readString(data.deployUrl),
+      readString(data.liveUrl),
+      readString(data.domain),
+      readString(data.url),
+      ...readStringArray(data.domains),
+      ...registrarDomains,
+      ...staticHosts,
+      ...vercelDomains,
+    ].map((value) => normalizeDomain(value ?? null))
+  )
+}
+
+function collectRepos(data: Record<string, unknown>) {
+  const repoObjects = Array.isArray(data.repos)
+    ? data.repos.flatMap((repo) => {
+        const record = asRecord(repo)
+        return [readString(record.fullName), readString(record.url)]
+      })
+    : []
+  const repository = asRecord(data.repository)
+
+  return unique(
+    [
+      readString(data.githubRepo),
+      readString(data.repo),
+      readString(data.repository),
+      readString(repository.fullName),
+      readString(repository.url),
+      ...readStringArray(data.githubRepos),
+      ...readStringArray(data.repositoryChains),
+      ...repoObjects,
+    ].map((value) => normalizeRepo(value ?? null))
+  )
+}
+
+function collectVercelKeys(data: Record<string, unknown>) {
+  const projectObjects = Array.isArray(data.vercelProjects) ? data.vercelProjects : []
+  return unique([
+    readString(data.vercelProjectId),
+    readString(data.vercelProjectName),
+    readString(data.vercelProject),
+    readString(data.vercelId),
+    readString(data.vercelTeamId),
+    ...readStringArray(data.vercelProjectIds),
+    ...projectObjects.flatMap((project) => {
+      const record = asRecord(project)
+      return [
+        readString(record.id),
+        readString(record.name),
+        normalizeDomain(readString(record.url)),
+        ...readStringArray(record.domains).map((domain) => normalizeDomain(domain)),
+      ]
+    }),
+  ])
+}
+
+function workspaceQualityScore(id: string, data: Record<string, unknown>) {
+  const slug = workspaceNameSlug(data) || slugifyWorkspaceName(id)
+  let score = 0
+  if (collectDomains(data).length > 0) score += 120
+  if (collectRepos(data).length > 0 || collectVercelKeys(data).length > 0) score += 90
+  if (slug && slug !== "untitled-workspace") score += 45
+  if (Array.isArray(data.projectIds) && data.projectIds.length > 0) score += 35
+  if (typeof data.memberCount === "number" && data.memberCount > 0) score += 20
+  if (stripGeneratedSuffix(slug) === slug) score += 10
+  if (workspaceIsArchived(data)) score -= 500
+  return score
 }
 
 function safeProjectDocId(value: string) {
@@ -88,39 +221,132 @@ function buildInitialProject({
   }
 }
 
-async function findExistingWorkspaceForName({
+async function findReusableWorkspaceCandidate({
   db,
   uid,
+  userWorkspaceIds,
   clientId,
+  clientEmail,
   name,
+  requestData,
+  existingClientData,
 }: {
   db: FirebaseFirestore.Firestore
   uid: string
+  userWorkspaceIds: string[]
   clientId: string | null
+  clientEmail: string | null
   name: string
+  requestData: Record<string, unknown>
+  existingClientData: Record<string, unknown> | null
 }) {
   const targetSlug = slugifyWorkspaceName(name)
   if (!targetSlug) return null
+  const targetBaseSlug = stripGeneratedSuffix(targetSlug)
+  const targetDomains = new Set(
+    unique([
+      ...collectDomains(requestData),
+      ...collectDomains(existingClientData ?? {}),
+    ])
+  )
+  const targetRepos = new Set(unique([...collectRepos(requestData), ...collectRepos(existingClientData ?? {})]))
+  const targetVercelKeys = new Set(unique([...collectVercelKeys(requestData), ...collectVercelKeys(existingClientData ?? {})]))
+  const explicitClientWorkspaceIds = new Set([
+    readString(existingClientData?.workspaceId),
+    ...readStringArray(existingClientData?.workspaceIds),
+  ].filter((id): id is string => Boolean(id)))
 
-  const [ownerSnap, clientSnap] = await Promise.all([
+  const [ownerSnap, clientSnap, clientEmailSnap, domainSnaps, linkedSnaps] = await Promise.all([
     db.collection("workspaces").where("ownerUid", "==", uid).limit(50).get().catch(() => null),
     clientId
       ? db.collection("workspaces").where("clientId", "==", clientId).limit(50).get().catch(() => null)
       : Promise.resolve(null),
+    clientEmail
+      ? db.collection("workspaces").where("clientEmail", "==", clientEmail).limit(50).get().catch(() => null)
+      : Promise.resolve(null),
+    Promise.all(
+      Array.from(targetDomains)
+        .slice(0, 10)
+        .map((domain) =>
+          db.collection("workspaces").where("domains", "array-contains", domain).limit(20).get().catch(() => null)
+        )
+    ),
+    Promise.all(
+      Array.from(new Set([...userWorkspaceIds, ...explicitClientWorkspaceIds]))
+        .slice(0, 100)
+        .map((workspaceId) => db.collection("workspaces").doc(workspaceId).get().catch(() => null))
+    ),
   ])
 
-  const candidates = new Map<string, FirebaseFirestore.QueryDocumentSnapshot>()
+  const candidates = new Map<string, FirebaseFirestore.DocumentSnapshot>()
   for (const doc of ownerSnap?.docs ?? []) candidates.set(doc.id, doc)
   for (const doc of clientSnap?.docs ?? []) candidates.set(doc.id, doc)
+  for (const doc of clientEmailSnap?.docs ?? []) candidates.set(doc.id, doc)
+  for (const snap of domainSnaps) {
+    for (const doc of snap?.docs ?? []) candidates.set(doc.id, doc)
+  }
+  for (const snap of linkedSnaps) {
+    if (snap?.exists) candidates.set(snap.id, snap as FirebaseFirestore.DocumentSnapshot)
+  }
 
+  const matches: Array<{ id: string; data: Record<string, unknown>; reasons: string[]; score: number }> = []
   for (const doc of candidates.values()) {
     const data = doc.data() as Record<string, unknown>
-    if (workspaceNameSlug(data) === targetSlug) {
-      return { id: doc.id, data }
+    if (workspaceIsArchived(data)) continue
+    const reasons: string[] = []
+    let score = 0
+    const slug = workspaceNameSlug(data) || slugifyWorkspaceName(doc.id)
+    const baseSlug = stripGeneratedSuffix(slug)
+    const workspaceDomains = collectDomains(data)
+    const workspaceRepos = collectRepos(data)
+    const workspaceVercelKeys = collectVercelKeys(data)
+    const ownerMatches = readString(data.ownerUid) === uid || userWorkspaceIds.includes(doc.id)
+
+    if (explicitClientWorkspaceIds.has(doc.id)) {
+      reasons.push("client workspace reference")
+      score += 80
+    }
+    if (slug === targetSlug) {
+      reasons.push("normalized name")
+      score += 55
+    } else if (baseSlug && baseSlug === targetBaseSlug) {
+      reasons.push("generated suffix base name")
+      score += 45
+    }
+    if (clientId && readString(data.clientId) === clientId) {
+      reasons.push("clientId")
+      score += 25
+    }
+    if (clientEmail && readString(data.clientEmail)?.toLowerCase() === clientEmail) {
+      reasons.push("clientEmail")
+      score += 25
+    }
+    if (ownerMatches) {
+      reasons.push("owner or user workspace link")
+      score += 20
+    }
+    if (workspaceDomains.some((domain) => targetDomains.has(domain))) {
+      reasons.push("domain")
+      score += 100
+    }
+    if (workspaceRepos.some((repo) => targetRepos.has(repo))) {
+      reasons.push("GitHub repository")
+      score += 90
+    }
+    if (workspaceVercelKeys.some((key) => targetVercelKeys.has(key))) {
+      reasons.push("Vercel project")
+      score += 90
+    }
+
+    const strongAssetMatch = score >= 70
+    const nameOwnedMatch = score >= 55 && ownerMatches
+    if (strongAssetMatch || nameOwnedMatch) {
+      matches.push({ id: doc.id, data, reasons, score: score + workspaceQualityScore(doc.id, data) })
     }
   }
 
-  return null
+  matches.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+  return matches[0] ?? null
 }
 
 // ─── GET /api/workspaces — list workspaces for the calling user ───────────────
@@ -244,6 +470,7 @@ export async function GET(request: NextRequest) {
     const workspaces = workspaceEntries
       .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
       .filter(({ workspaceSnap }) => workspaceSnap.exists)
+      .filter(({ workspaceSnap }) => !workspaceIsArchived(workspaceSnap.data() as Record<string, unknown>))
       .map(({ workspaceSnap, memberSnap, membersSnap }) => {
         const workspace = normalizeWorkspace(
           workspaceSnap.id,
@@ -356,12 +583,31 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const userSnap = await db.collection("users").doc(uid).get().catch(() => null)
+    const userData = userSnap?.exists ? (userSnap.data() as Record<string, unknown>) : {}
+    const userWorkspaceIds = readStringArray(userData.workspaceIds)
+    const targetSlug = slugifyWorkspaceName(name)
+
+    if (
+      targetSlug === "untitled-workspace" &&
+      (userWorkspaceIds.length > 0 || Boolean(clientId) || Boolean(existingClientData?.workspaceId))
+    ) {
+      return NextResponse.json(
+        { error: "Untitled Workspace cannot be created when this account already has a workspace identity." },
+        { status: 409 }
+      )
+    }
+
     const now = FieldValue.serverTimestamp()
-    const existingWorkspace = await findExistingWorkspaceForName({
+    const existingWorkspace = await findReusableWorkspaceCandidate({
       db,
       uid,
+      userWorkspaceIds,
       clientId,
+      clientEmail,
       name,
+      requestData: body,
+      existingClientData,
     })
 
     if (existingWorkspace) {
@@ -455,6 +701,7 @@ export async function POST(request: NextRequest) {
             updatedAt: new Date().toISOString(),
           }),
           reused: true,
+          reuseReasons: existingWorkspace.reasons,
         },
         { status: 200 }
       )

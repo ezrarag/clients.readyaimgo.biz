@@ -259,6 +259,7 @@ interface StatusVideoUpdate {
 
 interface StatusVideosResponse {
   statusVideos: Array<Record<string, unknown> & { id: string }>
+  candidateClientIds?: string[]
 }
 
 interface CorrespondenceItem {
@@ -1136,6 +1137,7 @@ export default function WorkspacePage() {
   const [files, setFiles] = useState<WorkspaceFile[]>([])
   const [statusVideos, setStatusVideos] = useState<StatusVideoUpdate[]>([])
   const [statusVideosLoading, setStatusVideosLoading] = useState(false)
+  const [statusVideoCandidateClientIds, setStatusVideoCandidateClientIds] = useState<string[]>([])
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -1423,20 +1425,78 @@ export default function WorkspacePage() {
     const clientId = workspace?.clientId?.trim()
     if (!user || !workspace) {
       setStatusVideos([])
+      setStatusVideoCandidateClientIds([])
       setStatusVideosLoading(false)
       return
     }
 
     setStatusVideos([])
+    setStatusVideoCandidateClientIds([])
     setStatusVideosLoading(true)
 
     let cancelled = false
+    const unsubscribeFns: Array<() => void> = []
+    const liveVideoByClientId = new Map<string, StatusVideoUpdate[]>()
+
+    const updateLiveStatusVideos = () => {
+      const liveVideos = Array.from(liveVideoByClientId.values())
+        .flat()
+        .sort(
+          (a, b) =>
+            (dateFromUnknown(b.createdAt)?.getTime() ?? 0) -
+            (dateFromUnknown(a.createdAt)?.getTime() ?? 0)
+        )
+      if (liveVideos.length > 0) {
+        setStatusVideos(liveVideos.slice(0, 10))
+        setStatusVideosLoading(false)
+      }
+    }
+
+    const subscribeToClientVideos = (candidateClientIds: string[]) => {
+      const ids = Array.from(new Set(candidateClientIds.map((id) => id.trim()).filter(Boolean)))
+      setStatusVideoCandidateClientIds(ids)
+
+      ids.forEach((candidateClientId) => {
+        const unsubscribe = onSnapshot(
+          query(
+            collection(getDb(), "clients", candidateClientId, "statusVideos"),
+            orderBy("createdAt", "desc"),
+            limit(10)
+          ),
+          (snapshot) => {
+            liveVideoByClientId.set(
+              candidateClientId,
+              snapshot.docs
+                .map((docSnap) =>
+                  normalizeStatusVideoUpdate(
+                    `${candidateClientId}:${docSnap.id}`,
+                    docSnap.data() as Record<string, unknown>,
+                    dominantType
+                  )
+                )
+                .filter((item): item is StatusVideoUpdate => Boolean(item))
+            )
+            updateLiveStatusVideos()
+          },
+          (err) => {
+            console.warn(`Unable to load status videos for ${candidateClientId}:`, err)
+            setStatusVideosLoading(false)
+          }
+        )
+        unsubscribeFns.push(unsubscribe)
+      })
+    }
+
     apiFetch<StatusVideosResponse>(
       user,
       `/api/workspaces/${encodeURIComponent(params.workspaceId)}/status-videos`
     )
       .then((payload) => {
         if (cancelled) return
+        const candidateClientIds = Array.from(
+          new Set([clientId, ...(payload.candidateClientIds ?? [])].filter((id): id is string => Boolean(id)))
+        )
+        subscribeToClientVideos(candidateClientIds)
         setStatusVideos(
           payload.statusVideos
             .map((video) => normalizeStatusVideoUpdate(video.id, video, dominantType))
@@ -1451,49 +1511,9 @@ export default function WorkspacePage() {
         if (!cancelled) setStatusVideosLoading(false)
       })
 
-    if (!clientId) {
-      return () => {
-        cancelled = true
-      }
-    }
-
-    const unsubscribe = onSnapshot(
-      query(
-        collection(getDb(), "clients", clientId, "statusVideos"),
-        orderBy("createdAt", "desc"),
-        limit(10)
-      ),
-      (snapshot) => {
-        const liveVideos = snapshot.docs
-          .map((docSnap) =>
-            normalizeStatusVideoUpdate(
-              docSnap.id,
-              docSnap.data() as Record<string, unknown>,
-              dominantType
-            )
-          )
-          .filter((item): item is StatusVideoUpdate => Boolean(item))
-
-        if (liveVideos.length > 0) {
-          setStatusVideos(
-            liveVideos.sort(
-              (a, b) =>
-                (dateFromUnknown(b.createdAt)?.getTime() ?? 0) -
-                (dateFromUnknown(a.createdAt)?.getTime() ?? 0)
-            )
-          )
-          setStatusVideosLoading(false)
-        }
-      },
-      (err) => {
-        console.warn("Unable to load status videos:", err)
-        setStatusVideosLoading(false)
-      }
-    )
-
     return () => {
       cancelled = true
-      unsubscribe()
+      unsubscribeFns.forEach((unsubscribe) => unsubscribe())
     }
   }, [dominantType, params.workspaceId, user, workspace])
 
@@ -4002,8 +4022,13 @@ export default function WorkspacePage() {
               </Card>
             ) : statusVideos.length === 0 ? (
               <Card>
-                <CardContent className="flex items-center justify-center py-12 text-center text-sm text-slate-500">
-                  Build updates from your ReadyAimGo team will appear here.
+                <CardContent className="flex flex-col items-center justify-center gap-2 py-12 text-center text-sm text-slate-500">
+                  <span>Build updates from your ReadyAimGo team will appear here.</span>
+                  {canManageWorkspace && statusVideoCandidateClientIds.length > 0 ? (
+                    <span className="font-mono text-xs text-slate-400">
+                      Checked client records: {statusVideoCandidateClientIds.join(", ")}
+                    </span>
+                  ) : null}
                 </CardContent>
               </Card>
             ) : (

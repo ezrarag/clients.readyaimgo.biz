@@ -27,6 +27,13 @@ import type { WorkspaceRole } from "@/lib/workspaces"
 
 export const dynamic = "force-dynamic"
 
+function isArchivedWorkspace(data: Record<string, unknown>) {
+  return (
+    (typeof data.status === "string" && data.status === "archived") ||
+    (typeof data.archivedDuplicateOf === "string" && data.archivedDuplicateOf.trim().length > 0)
+  )
+}
+
 export async function POST(request: NextRequest) {
   // ── Auth ─────────────────────────────────────────────────────────────────────
   const idToken = getBearerToken(request)
@@ -74,6 +81,21 @@ export async function POST(request: NextRequest) {
     : []
   const existingSet = new Set(existingIds)
   const newWorkspaceIds: string[] = []
+  const archivedExistingIds: string[] = []
+
+  if (existingIds.length > 0) {
+    const existingSnaps = await Promise.all(
+      existingIds.map((workspaceId) => db.collection("workspaces").doc(workspaceId).get().catch(() => null))
+    )
+    for (const snap of existingSnaps) {
+      if (!snap?.exists) continue
+      const workspaceData = snap.data() as Record<string, unknown>
+      if (isArchivedWorkspace(workspaceData)) {
+        existingSet.delete(snap.id)
+        archivedExistingIds.push(snap.id)
+      }
+    }
+  }
 
   const displayName =
     typeof userData?.displayName === "string" ? userData.displayName : null
@@ -93,6 +115,13 @@ export async function POST(request: NextRequest) {
       if (!workspaceRef) continue
 
       const workspaceId = workspaceRef.id
+      const workspaceSnap = await workspaceRef.get().catch(() => null)
+      const workspaceData = workspaceSnap?.exists ? (workspaceSnap.data() as Record<string, unknown>) : null
+      if (!workspaceData || isArchivedWorkspace(workspaceData)) {
+        await inviteDoc.ref.delete().catch(() => {})
+        existingSet.delete(workspaceId)
+        continue
+      }
 
       // Clean up stale invite even if already a member
       if (existingSet.has(workspaceId)) {
@@ -150,6 +179,10 @@ export async function POST(request: NextRequest) {
         if (existingSet.has(workspaceId)) continue
 
         const wsData = wsDoc.data() as Record<string, unknown>
+        if (isArchivedWorkspace(wsData)) {
+          existingSet.delete(workspaceId)
+          continue
+        }
         const role: WorkspaceRole =
           parseWorkspaceRole(wsData.domainRole) ?? "employee-of-client"
 
@@ -183,15 +216,15 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 4. Persist new ids back to the user doc ───────────────────────────────────
-  if (newWorkspaceIds.length > 0) {
+  if (newWorkspaceIds.length > 0 || archivedExistingIds.length > 0) {
     try {
-      await userRef.set(
-        {
-          workspaceIds: FieldValue.arrayUnion(...newWorkspaceIds),
-          updatedAt: now,
-        },
-        { merge: true }
-      )
+      const update: Record<string, unknown> = { updatedAt: now }
+      if (archivedExistingIds.length > 0) {
+        update.workspaceIds = Array.from(existingSet)
+      } else if (newWorkspaceIds.length > 0) {
+        update.workspaceIds = FieldValue.arrayUnion(...newWorkspaceIds)
+      }
+      await userRef.set(update, { merge: true })
     } catch (err) {
       console.warn("workspaces/join: failed to update user workspaceIds", err)
     }

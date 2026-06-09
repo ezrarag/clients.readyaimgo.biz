@@ -92,7 +92,7 @@ function isAuthFlowRoute(pathname: string) {
  * Returns the (possibly updated) workspaceIds array.
  * Fire-and-forget safe — always resolves, never throws.
  */
-async function fulfillWorkspaceMembership(user: User): Promise<string[]> {
+async function fulfillWorkspaceMembership(user: User): Promise<string[] | null> {
   try {
     const token = await user.getIdToken()
     const res = await fetch("/api/workspaces/join", {
@@ -103,11 +103,11 @@ async function fulfillWorkspaceMembership(user: User): Promise<string[]> {
       },
       cache: "no-store",
     })
-    if (!res.ok) return []
+    if (!res.ok) return null
     const payload = (await res.json()) as { workspaceIds?: string[] }
     return Array.isArray(payload.workspaceIds) ? payload.workspaceIds : []
   } catch {
-    return []
+    return null
   }
 }
 
@@ -274,9 +274,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               )
             : []
 
-        const joinedIds = await joinPromise.catch(() => [])
+        const joinedIds = await joinPromise.catch(() => null)
         if (cancelled || activeUid !== nextUser.uid) return
-        const mergedIds = Array.from(new Set([...rawWsIds, ...joinedIds]))
+        const mergedIds = Array.from(new Set(joinedIds ?? rawWsIds))
         const primary = mergedIds[0] ?? null
 
         setBeamUser(nextBeamUser)
