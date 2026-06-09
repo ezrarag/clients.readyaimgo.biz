@@ -1164,6 +1164,8 @@ export default function WorkspacePage() {
   const [accountInfoOpen, setAccountInfoOpen] = useState(false)
   const [clientRecord, setClientRecord] = useState<Record<string, unknown> | null>(null)
   const [clientRecordLoading, setClientRecordLoading] = useState(false)
+  const [accountPhoneDraft, setAccountPhoneDraft] = useState("")
+  const [accountPhoneSaving, setAccountPhoneSaving] = useState(false)
   const [draftForm, setDraftForm] = useState<DraftFormState>(DRAFT_FORM_DEFAULTS)
   const [drafting, setDrafting] = useState(false)
   const [draftResult, setDraftResult] = useState<GeneratedDraft | null>(null)
@@ -1508,7 +1510,9 @@ export default function WorkspacePage() {
     getDoc(doc(getDb(), "clients", clientId))
       .then((snapshot) => {
         if (cancelled) return
-        setClientRecord(snapshot.exists() ? (snapshot.data() as Record<string, unknown>) : null)
+        const data = snapshot.exists() ? (snapshot.data() as Record<string, unknown>) : null
+        setClientRecord(data)
+        setAccountPhoneDraft(typeof data?.phone === "string" ? data.phone : "")
       })
       .catch((err) => {
         console.warn("Unable to load client account info:", err)
@@ -1522,6 +1526,29 @@ export default function WorkspacePage() {
       cancelled = true
     }
   }, [accountInfoOpen, workspace?.clientId])
+
+  const saveAccountPhone = async () => {
+    if (!user || !workspace) return
+    setAccountPhoneSaving(true)
+    setError(null)
+    try {
+      const payload = await apiFetch<{ phone: string }>(
+        user,
+        `/api/workspaces/${encodeURIComponent(params.workspaceId)}/account-info`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ phone: accountPhoneDraft }),
+        }
+      )
+      setAccountPhoneDraft(payload.phone)
+      setClientRecord((current) => ({ ...(current ?? {}), phone: payload.phone }))
+      setMessage("Account phone updated.")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update account phone.")
+    } finally {
+      setAccountPhoneSaving(false)
+    }
+  }
 
   useEffect(() => {
     if (!user || !selectedProjectId) {
@@ -5016,6 +5043,34 @@ export default function WorkspacePage() {
                   <span className="text-right font-medium text-slate-900">
                     {workspace.clientEmail ?? workspace.registrationEmail ?? "N/A"}
                   </span>
+                </div>
+                <div className="mt-4 space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                    SMS phone
+                  </label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      type="tel"
+                      value={accountPhoneDraft}
+                      onChange={(event) => setAccountPhoneDraft(event.target.value)}
+                      placeholder="+1 312 555 0199"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void saveAccountPhone()}
+                      disabled={accountPhoneSaving || clientRecordLoading}
+                    >
+                      {accountPhoneSaving ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : null}
+                      Save
+                    </Button>
+                  </div>
+                  <p className="text-xs leading-5 text-slate-500">
+                    Video update texts are sent to this number after a build update is
+                    processed.
+                  </p>
                 </div>
               </div>
             </section>
