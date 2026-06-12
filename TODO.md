@@ -173,3 +173,18 @@ After successful testing:
 
 **Ready to test?** Make sure all ⚠️ items above are completed, then proceed with the testing checklist!
 
+
+---
+
+## Firestore Rules — GI-1 (Workspace Updates)
+
+Add to firestore.rules after GI-1 deploys:
+
+```
+match /workspaces/{workspaceId}/updates/{updateId} {
+  allow read: if isWorkspaceMember(workspaceId) || isAdmin();
+  allow create: if isAdmin();
+  allow update: if isWorkspaceMember(workspaceId) || isAdmin();
+  allow delete: if isAdmin();
+}
+```

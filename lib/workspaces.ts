@@ -184,6 +184,8 @@ export interface Workspace {
   hosting: WorkspaceHostingConfig
   /** Workspace-level meeting/call account preferences. */
   meetingProviders: WorkspaceMeetingProvider[]
+  /** Google Calendar ID shared with this client (e.g. "abc@group.calendar.google.com"). */
+  googleCalendarId: string | null
 
   // ── Legacy bridge fields ────────────────────────────────────────────────────
   // These link a workspace back to the existing clients/{clientId} and
@@ -445,6 +447,10 @@ export function normalizeWorkspace(id: string, data: Record<string, unknown>): W
     vercelTeamId: typeof data.vercelTeamId === "string" ? data.vercelTeamId : null,
     hosting: normalizeHosting(data.hosting),
     meetingProviders: normalizeMeetingProviders(data.meetingProviders),
+    googleCalendarId:
+      typeof data.googleCalendarId === "string" && data.googleCalendarId.trim()
+        ? data.googleCalendarId.trim()
+        : null,
     // Legacy bridge
     clientId: typeof data.clientId === "string" ? data.clientId : null,
     clientEmail: typeof data.clientEmail === "string" ? data.clientEmail : null,
