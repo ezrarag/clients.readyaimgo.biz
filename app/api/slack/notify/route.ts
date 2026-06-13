@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL
 
 export interface SlackNotification {
-  event: "signup" | "payment" | "upgrade"
+  event: "signup" | "payment" | "upgrade" | "meeting_scheduled"
   email: string
   name?: string
   planType?: string
@@ -48,6 +48,15 @@ export async function POST(request: NextRequest) {
         message = `${emoji} *Plan Upgrade*\n*Email:* ${email}\n*Name:* ${name || "N/A"}\n*New Plan:* ${planType || "N/A"}`
         break
 
+      case "meeting_scheduled":
+        emoji = "📅"
+        message =
+          `${emoji} *Meeting Scheduled*\n` +
+          `*Client:* ${name || email}\n` +
+          `*Event:* ${description || "Meeting"}\n` +
+          `*Time:* ${planType || "TBD"}`
+        break
+
       default:
         return NextResponse.json(
           { error: "Invalid event type" },
@@ -81,4 +90,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-

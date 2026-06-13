@@ -50,7 +50,7 @@ service cloud.firestore {
 
     function isWorkspaceManager(workspaceId) {
       return isWorkspaceMember(workspaceId) &&
-        workspaceMemberRole(workspaceId) in ['owner', 'manager'];
+        workspaceMemberRole(workspaceId) in ['owner', 'developer', 'manager'];
     }
 
     function isWorkspaceOwner(workspaceId) {
@@ -124,6 +124,13 @@ service cloud.firestore {
         allow read: if isWorkspaceMember(workspaceId) || isAdmin();
         allow create: if isWorkspaceMember(workspaceId) || isAdmin();
         allow update, delete: if isWorkspaceManager(workspaceId) || isAdmin();
+      }
+
+      match /updates/{updateId} {
+        allow read: if isWorkspaceMember(workspaceId) || isAdmin();
+        allow create: if isAdmin();
+        allow update: if isWorkspaceMember(workspaceId) || isAdmin();
+        allow delete: if isAdmin();
       }
     }
 

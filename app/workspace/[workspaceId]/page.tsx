@@ -93,8 +93,12 @@ import {
   assetProjectTypeLabel,
   parseAssetProjectType,
 } from "@/lib/workspaces"
+import type { CalendarEvent } from "@/lib/calendar-types"
 import type { ValuePaymentRecord } from "@/lib/value-profile"
 import type { ClientDeliverable } from "@/lib/deliverables"
+import type { WorkspaceUpdate } from "@/lib/workspace-updates"
+import { isUnread, normalizeWorkspaceUpdate, toYouTubeEmbed } from "@/lib/workspace-updates"
+import { cn } from "@/lib/utils"
 
 // ─── Local types ──────────────────────────────────────────────────────────────
 
@@ -246,20 +250,6 @@ interface WorkspaceProjectTask {
   dueDate?: string
   source?: string
   createdByEmail?: string
-}
-
-interface StatusVideoUpdate {
-  id: string
-  title: string
-  videoUrl: string
-  aiSummary: string[]
-  assetProjectType: AssetProjectType
-  createdAt: unknown
-}
-
-interface StatusVideosResponse {
-  statusVideos: Array<Record<string, unknown> & { id: string }>
-  candidateClientIds?: string[]
 }
 
 interface CorrespondenceItem {
@@ -495,61 +485,6 @@ function projectRepositoryUrl(project: WorkspaceProject) {
 function projectCommitLabel(project: WorkspaceProject) {
   const sha = project.latestCommitSha || project.commitSha
   return sha ? sha.slice(0, 7) : "commit pending"
-}
-
-function classifyStatusVideoType(data: Record<string, unknown>, fallback: AssetProjectType) {
-  const hasExplicitType =
-    data.assetProjectType !== undefined ||
-    data.projectType !== undefined ||
-    data.workspaceType !== undefined ||
-    data.category !== undefined
-  if (hasExplicitType) {
-    return parseAssetProjectType(
-      data.assetProjectType ?? data.projectType ?? data.workspaceType ?? data.category
-    )
-  }
-
-  const text = [data.title, data.aiSummary, data.description, data.summary]
-    .flatMap((value) => (Array.isArray(value) ? value : [value]))
-    .filter((value): value is string => typeof value === "string")
-    .join(" ")
-    .toLowerCase()
-
-  if (text.includes("cohort")) return "participant"
-  if (text.includes("motion") || text.includes("transport") || text.includes("fleet")) {
-    return "transportation"
-  }
-  if (text.includes("space") || text.includes("real estate") || text.includes("property")) {
-    return "real-estate"
-  }
-  if (text.includes("nexus") || text.includes("website") || text.includes("web app")) {
-    return "webdev"
-  }
-  return fallback
-}
-
-function normalizeStatusVideoUpdate(
-  id: string,
-  data: Record<string, unknown>,
-  fallback: AssetProjectType
-): StatusVideoUpdate | null {
-  const videoUrl =
-    cleanDisplayValue(data.videoUrl as string | null | undefined) ||
-    cleanDisplayValue(data.downloadUrl as string | null | undefined) ||
-    cleanDisplayValue(data.url as string | null | undefined) ||
-    cleanDisplayValue(data.publicUrl as string | null | undefined)
-  if (!videoUrl) return null
-
-  return {
-    id,
-    title:
-      (typeof data.title === "string" && data.title.trim()) ||
-      "ReadyAimGo Build Update",
-    videoUrl,
-    aiSummary: normalizeAiSummary(data.aiSummary ?? data.summary),
-    assetProjectType: classifyStatusVideoType(data, fallback),
-    createdAt: data.createdAt ?? null,
-  }
 }
 
 function fleetIdsForProject(project: WorkspaceProject) {
@@ -1089,23 +1024,6 @@ function statusTone(status?: string) {
   return "bg-slate-100 text-slate-600"
 }
 
-function normalizeAiSummary(value: unknown) {
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => (typeof item === "string" ? item.trim() : ""))
-      .filter(Boolean)
-  }
-
-  if (typeof value === "string") {
-    return value
-      .split(/\n|•|-/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-  }
-
-  return []
-}
-
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function WorkspacePage() {
@@ -1135,9 +1053,11 @@ export default function WorkspacePage() {
   const [selectedContract, setSelectedContract] = useState<BeamContract | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [files, setFiles] = useState<WorkspaceFile[]>([])
-  const [statusVideos, setStatusVideos] = useState<StatusVideoUpdate[]>([])
-  const [statusVideosLoading, setStatusVideosLoading] = useState(false)
-  const [statusVideoCandidateClientIds, setStatusVideoCandidateClientIds] = useState<string[]>([])
+  const [workspaceUpdates, setWorkspaceUpdates] = useState<WorkspaceUpdate[]>([])
+  const [updatesLoading, setUpdatesLoading] = useState(true)
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
+  const [calendarConfigured, setCalendarConfigured] = useState(true)
+  const [calendarLoading, setCalendarLoading] = useState(true)
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -1209,6 +1129,14 @@ export default function WorkspacePage() {
     [members, user?.uid]
   )
   const canManageWorkspace = currentMember?.role === "owner" || currentMember?.role === "developer"
+  const unreadCount = useMemo(
+    () => (user?.uid ? workspaceUpdates.filter((update) => isUnread(update, user.uid)).length : 0),
+    [user?.uid, workspaceUpdates]
+  )
+  const getWorkspaceUpdateToken = useCallback(() => {
+    if (!user) return Promise.reject(new Error("Not signed in."))
+    return user.getIdToken()
+  }, [user])
   const joinMeetingProvider = useMemo(() => {
     const providers =
       meetingProviders.length > 0 ? meetingProviders : workspace?.meetingProviders ?? []
@@ -1423,100 +1351,77 @@ export default function WorkspacePage() {
   }, [authLoading, load, router, user])
 
   useEffect(() => {
-    const clientId = workspace?.clientId?.trim()
-    if (!user || !workspace) {
-      setStatusVideos([])
-      setStatusVideoCandidateClientIds([])
-      setStatusVideosLoading(false)
+    if (!user) {
+      setCalendarEvents([])
+      setCalendarConfigured(false)
+      setCalendarLoading(false)
       return
     }
 
-    setStatusVideos([])
-    setStatusVideoCandidateClientIds([])
-    setStatusVideosLoading(true)
-
     let cancelled = false
-    const unsubscribeFns: Array<() => void> = []
-    const liveVideoByClientId = new Map<string, StatusVideoUpdate[]>()
+    setCalendarLoading(true)
 
-    const updateLiveStatusVideos = () => {
-      const liveVideos = Array.from(liveVideoByClientId.values())
-        .flat()
-        .sort(
-          (a, b) =>
-            (dateFromUnknown(b.createdAt)?.getTime() ?? 0) -
-            (dateFromUnknown(a.createdAt)?.getTime() ?? 0)
-        )
-      if (liveVideos.length > 0) {
-        setStatusVideos(liveVideos.slice(0, 10))
-        setStatusVideosLoading(false)
-      }
-    }
-
-    const subscribeToClientVideos = (candidateClientIds: string[]) => {
-      const ids = Array.from(new Set(candidateClientIds.map((id) => id.trim()).filter(Boolean)))
-      setStatusVideoCandidateClientIds(ids)
-
-      ids.forEach((candidateClientId) => {
-        const unsubscribe = onSnapshot(
-          query(
-            collection(getDb(), "clients", candidateClientId, "statusVideos"),
-            orderBy("createdAt", "desc"),
-            limit(10)
-          ),
-          (snapshot) => {
-            liveVideoByClientId.set(
-              candidateClientId,
-              snapshot.docs
-                .map((docSnap) =>
-                  normalizeStatusVideoUpdate(
-                    `${candidateClientId}:${docSnap.id}`,
-                    docSnap.data() as Record<string, unknown>,
-                    dominantType
-                  )
-                )
-                .filter((item): item is StatusVideoUpdate => Boolean(item))
-            )
-            updateLiveStatusVideos()
-          },
-          (err) => {
-            console.warn(`Unable to load status videos for ${candidateClientId}:`, err)
-            setStatusVideosLoading(false)
-          }
-        )
-        unsubscribeFns.push(unsubscribe)
-      })
-    }
-
-    apiFetch<StatusVideosResponse>(
-      user,
-      `/api/workspaces/${encodeURIComponent(params.workspaceId)}/status-videos`
-    )
-      .then((payload) => {
+    user
+      .getIdToken()
+      .then((token) =>
+        fetch(`/api/workspaces/${encodeURIComponent(params.workspaceId)}/calendar-events`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+      )
+      .then((response) => response.json())
+      .then((data) => {
         if (cancelled) return
-        const candidateClientIds = Array.from(
-          new Set([clientId, ...(payload.candidateClientIds ?? [])].filter((id): id is string => Boolean(id)))
-        )
-        subscribeToClientVideos(candidateClientIds)
-        setStatusVideos(
-          payload.statusVideos
-            .map((video) => normalizeStatusVideoUpdate(video.id, video, dominantType))
-            .filter((video): video is StatusVideoUpdate => Boolean(video))
-        )
+        setCalendarEvents(Array.isArray(data.events) ? data.events : [])
+        setCalendarConfigured(data.configured ?? false)
       })
-      .catch((err) => {
-        console.warn("Unable to load server-resolved status videos:", err)
-        if (!cancelled) setStatusVideos([])
+      .catch((error) => {
+        console.error(error)
+        if (!cancelled) {
+          setCalendarEvents([])
+          setCalendarConfigured(false)
+        }
       })
       .finally(() => {
-        if (!cancelled) setStatusVideosLoading(false)
+        if (!cancelled) setCalendarLoading(false)
       })
 
     return () => {
       cancelled = true
-      unsubscribeFns.forEach((unsubscribe) => unsubscribe())
     }
-  }, [dominantType, params.workspaceId, user, workspace])
+  }, [params.workspaceId, user])
+
+  useEffect(() => {
+    if (!user) {
+      setWorkspaceUpdates([])
+      setUpdatesLoading(false)
+      return
+    }
+
+    setUpdatesLoading(true)
+    const unsubscribe = onSnapshot(
+      query(
+        collection(getDb(), "workspaces", params.workspaceId, "updates"),
+        orderBy("pinned", "desc"),
+        orderBy("postedAt", "desc"),
+        limit(20)
+      ),
+      (snapshot) => {
+        setWorkspaceUpdates(
+          snapshot.docs.map((docSnap) =>
+            normalizeWorkspaceUpdate(docSnap.id, docSnap.data() as Record<string, unknown>)
+          )
+        )
+        setUpdatesLoading(false)
+      },
+      (err) => {
+        console.warn("Unable to load workspace updates:", err)
+        setWorkspaceUpdates([])
+        setUpdatesLoading(false)
+      }
+    )
+
+    return () => unsubscribe()
+  }, [params.workspaceId, user])
 
   useEffect(() => {
     const clientId = workspace?.clientId?.trim()
@@ -1943,12 +1848,20 @@ export default function WorkspacePage() {
   }, [analyzingLedger, params.workspaceId, user])
 
   useEffect(() => {
-    if (!user || loading || !workspace || !paymentData?.clientId) return
+    if (!user || loading || !workspace || !paymentData?.clientId || !canManageWorkspace) return
     const workspaceId = params.workspaceId
     if (autoLedgerRefreshRef.current.has(workspaceId)) return
     autoLedgerRefreshRef.current.add(workspaceId)
     void handleAnalyzeLedger({ source: "page-load", silent: true })
-  }, [handleAnalyzeLedger, loading, params.workspaceId, paymentData?.clientId, user, workspace])
+  }, [
+    canManageWorkspace,
+    handleAnalyzeLedger,
+    loading,
+    params.workspaceId,
+    paymentData?.clientId,
+    user,
+    workspace,
+  ])
 
   const handleAnalyzeHosting = useCallback(
     async (opts: { force?: boolean; silent?: boolean } = {}) => {
@@ -2535,9 +2448,9 @@ export default function WorkspacePage() {
           <TabsTrigger value="updates">
             <Sparkles className="mr-2 h-4 w-4" />
             Updates
-            {statusVideos.length > 0 && (
-              <span className="ml-1.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                {statusVideos.length}
+            {unreadCount > 0 && (
+              <span className="ml-1.5 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                {unreadCount}
               </span>
             )}
           </TabsTrigger>
@@ -2585,6 +2498,66 @@ export default function WorkspacePage() {
         {/* ── Child Projects ── */}
         <TabsContent value="projects">
           <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <CalendarDays className="h-4 w-4" />
+                  Upcoming Meetings
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {calendarLoading ? (
+                  <div className="space-y-2">
+                    <div className="h-10 animate-pulse rounded-lg bg-muted/40" />
+                    <div className="h-10 animate-pulse rounded-lg bg-muted/40" />
+                  </div>
+                ) : null}
+
+                {!calendarLoading && !calendarConfigured ? (
+                  <p className="text-sm text-muted-foreground">
+                    No calendar connected yet — upcoming meetings will appear here.
+                  </p>
+                ) : null}
+
+                {!calendarLoading && calendarConfigured && calendarEvents.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No meetings scheduled in the next 30 days.
+                  </p>
+                ) : null}
+
+                {!calendarLoading && calendarEvents.length > 0 ? (
+                  <div>
+                    {calendarEvents.map((event) => (
+                      <div
+                        key={event.id}
+                        className="flex items-start justify-between gap-4 border-b py-3 last:border-0"
+                      >
+                        <div>
+                          <p className="text-sm font-medium">{event.summary}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {new Date(event.startAt).toLocaleString()}
+                          </p>
+                          {event.description ? (
+                            <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                              {event.description}
+                            </p>
+                          ) : null}
+                        </div>
+                        {event.meetLink ? (
+                          <Button asChild size="sm" variant="outline" className="shrink-0 gap-1.5">
+                            <a href={event.meetLink} target="_blank" rel="noopener noreferrer">
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              Join
+                            </a>
+                          </Button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">
                 Projects
@@ -4042,61 +4015,38 @@ export default function WorkspacePage() {
         {/* ── Build Updates ── */}
         <TabsContent value="updates">
           <div className="space-y-4">
-            {statusVideosLoading ? (
+            {updatesLoading ? (
+              <div className="grid gap-4 lg:grid-cols-2">
+                {[0, 1].map((index) => (
+                  <Card key={`updates-skeleton-${index}`}>
+                    <CardHeader>
+                      <div className="h-4 w-24 animate-pulse rounded-full bg-muted" />
+                      <div className="h-5 w-2/3 animate-pulse rounded-full bg-muted" />
+                      <div className="h-4 w-full animate-pulse rounded-full bg-muted" />
+                    </CardHeader>
+                    <CardContent>
+                      <div className="aspect-video w-full animate-pulse rounded-xl bg-muted" />
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : workspaceUpdates.length === 0 ? (
               <Card>
-                <CardContent className="flex items-center justify-center py-12 text-sm text-slate-500">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Loading build updates...
-                </CardContent>
-              </Card>
-            ) : statusVideos.length === 0 ? (
-              <Card>
-                <CardContent className="flex flex-col items-center justify-center gap-2 py-12 text-center text-sm text-slate-500">
-                  <span>Build updates from your ReadyAimGo team will appear here.</span>
-                  {canManageWorkspace && statusVideoCandidateClientIds.length > 0 ? (
-                    <span className="font-mono text-xs text-slate-400">
-                      Checked client records: {statusVideoCandidateClientIds.join(", ")}
-                    </span>
-                  ) : null}
+                <CardContent className="flex items-center justify-center py-12 text-center text-sm text-slate-500">
+                  No updates yet. Check back soon — Ezra will post project updates,
+                  recordings, and notes here.
                 </CardContent>
               </Card>
             ) : (
               <div className="grid gap-4 lg:grid-cols-2">
-                {statusVideos.map((update) => (
-                  <Card key={update.id} className="overflow-hidden">
-                    <CardHeader>
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <CardTitle>{update.title}</CardTitle>
-                          <p className="mt-1 text-xs text-slate-400">
-                            {formatSafeDate(
-                              update.createdAt,
-                              { month: "short", day: "numeric", year: "numeric" },
-                              "Date pending"
-                            )}
-                          </p>
-                        </div>
-                        <Badge variant="secondary">
-                          {assetProjectTypeLabel(update.assetProjectType)}
-                        </Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <video
-                        className="w-full rounded-2xl border border-border bg-slate-950"
-                        controls
-                        preload="metadata"
-                        src={update.videoUrl}
-                      />
-                      {update.aiSummary.length > 0 ? (
-                        <ul className="list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
-                          {update.aiSummary.map((item, index) => (
-                            <li key={`${update.id}-summary-${index}`}>{item}</li>
-                          ))}
-                        </ul>
-                      ) : null}
-                    </CardContent>
-                  </Card>
+                {workspaceUpdates.map((update) => (
+                  <UpdateCard
+                    key={update.id}
+                    update={update}
+                    uid={user?.uid ?? ""}
+                    workspaceId={params.workspaceId}
+                    getToken={getWorkspaceUpdateToken}
+                  />
                 ))}
               </div>
             )}
@@ -5227,5 +5177,89 @@ export default function WorkspacePage() {
         </DialogContent>
       </Dialog>
     </AppShell>
+  )
+}
+
+function UpdateCard({
+  update,
+  uid,
+  workspaceId,
+  getToken,
+}: {
+  update: WorkspaceUpdate
+  uid: string
+  workspaceId: string
+  getToken: () => Promise<string>
+}) {
+  const embedUrl = toYouTubeEmbed(update.url)
+  const unread = uid ? isUnread(update, uid) : false
+
+  useEffect(() => {
+    if (!unread || !uid) return
+    let cancelled = false
+    getToken()
+      .then((token) => {
+        if (cancelled) return
+        return fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/updates/${encodeURIComponent(update.id)}/seen`, {
+          method: "PATCH",
+          headers: { Authorization: `Bearer ${token}` },
+        })
+      })
+      .catch(console.error)
+
+    return () => {
+      cancelled = true
+    }
+  }, [getToken, uid, unread, update.id, workspaceId])
+
+  const postedAt = new Date(update.postedAt)
+  const postedLabel = Number.isNaN(postedAt.getTime())
+    ? "Date pending"
+    : postedAt.toLocaleDateString()
+
+  return (
+    <Card className={cn("border", unread && "border-blue-400 bg-blue-50/30")}>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            {unread ? (
+              <Badge className="mb-1 bg-blue-500 text-[10px] text-white">New</Badge>
+            ) : null}
+            {update.pinned ? (
+              <Badge variant="secondary" className="mb-1 ml-1 text-[10px]">
+                Pinned
+              </Badge>
+            ) : null}
+            <CardTitle className="text-base">{update.title}</CardTitle>
+            {update.description ? (
+              <CardDescription>{update.description}</CardDescription>
+            ) : null}
+          </div>
+          <span className="whitespace-nowrap text-xs text-muted-foreground">{postedLabel}</span>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {embedUrl ? (
+          <div className="aspect-video w-full overflow-hidden rounded-xl">
+            <iframe
+              src={embedUrl}
+              className="h-full w-full"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
+          </div>
+        ) : (
+          <a
+            href={update.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:underline"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Watch / View Update
+          </a>
+        )}
+      </CardContent>
+    </Card>
   )
 }
