@@ -29,6 +29,7 @@ import {
   UploadCloud,
   UserPlus,
   Users,
+  Video,
 } from "lucide-react"
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage"
 
@@ -312,6 +313,23 @@ interface WorkspaceConnectionResponse {
   workspace?: Workspace
   projects?: WorkspaceProject[]
   removedProjectIds?: string[]
+}
+
+/**
+ * A build-update video produced by the Drive → scan-drive → process pipeline
+ * and stored under clients/{clientId}/statusVideos. Surfaced to the client via
+ * GET /api/workspaces/[workspaceId]/status-videos, which matches the video's
+ * client to this workspace by name/alias.
+ */
+interface ClientStatusVideo {
+  id: string
+  sourceClientId: string
+  title: string
+  videoUrl: string
+  aiSummary?: string[] | string | null
+  rawTranscript?: string
+  category?: string
+  createdAt?: string | null
 }
 
 const PROJECT_ROLE_ORDER: WorkspaceRole[] = [
@@ -1055,6 +1073,8 @@ export default function WorkspacePage() {
   const [files, setFiles] = useState<WorkspaceFile[]>([])
   const [workspaceUpdates, setWorkspaceUpdates] = useState<WorkspaceUpdate[]>([])
   const [updatesLoading, setUpdatesLoading] = useState(true)
+  const [statusVideos, setStatusVideos] = useState<ClientStatusVideo[]>([])
+  const [statusVideosLoading, setStatusVideosLoading] = useState(true)
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
   const [calendarConfigured, setCalendarConfigured] = useState(true)
   const [calendarLoading, setCalendarLoading] = useState(true)
@@ -1421,6 +1441,44 @@ export default function WorkspacePage() {
     )
 
     return () => unsubscribe()
+  }, [params.workspaceId, user])
+
+  // Auto-matched build videos (Meet → Drive → scan-drive → clients/{id}/statusVideos).
+  // The API resolves which client this workspace maps to by name/alias, so the
+  // logged-in client sees the latest recording named for them.
+  useEffect(() => {
+    if (!user) {
+      setStatusVideos([])
+      setStatusVideosLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setStatusVideosLoading(true)
+    user
+      .getIdToken()
+      .then((token) =>
+        fetch(`/api/workspaces/${params.workspaceId}/status-videos`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        })
+      )
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`status ${res.status}`))))
+      .then((data) => {
+        if (cancelled) return
+        setStatusVideos(Array.isArray(data?.statusVideos) ? data.statusVideos : [])
+        setStatusVideosLoading(false)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        console.warn("Unable to load status videos:", err)
+        setStatusVideos([])
+        setStatusVideosLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [params.workspaceId, user])
 
   useEffect(() => {
@@ -4014,42 +4072,84 @@ export default function WorkspacePage() {
 
         {/* ── Build Updates ── */}
         <TabsContent value="updates">
-          <div className="space-y-4">
-            {updatesLoading ? (
-              <div className="grid gap-4 lg:grid-cols-2">
-                {[0, 1].map((index) => (
-                  <Card key={`updates-skeleton-${index}`}>
-                    <CardHeader>
-                      <div className="h-4 w-24 animate-pulse rounded-full bg-muted" />
-                      <div className="h-5 w-2/3 animate-pulse rounded-full bg-muted" />
-                      <div className="h-4 w-full animate-pulse rounded-full bg-muted" />
-                    </CardHeader>
-                    <CardContent>
-                      <div className="aspect-video w-full animate-pulse rounded-xl bg-muted" />
-                    </CardContent>
-                  </Card>
-                ))}
+          <div className="space-y-8">
+            {/* Auto-matched build videos: Meet recording → Drive → matched to this client */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Video className="h-4 w-4 text-primary" />
+                <h3 className="text-sm font-semibold text-slate-700">Build Videos</h3>
+                {statusVideos.length > 0 ? (
+                  <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                    {statusVideos.length}
+                  </span>
+                ) : null}
               </div>
-            ) : workspaceUpdates.length === 0 ? (
-              <Card>
-                <CardContent className="flex items-center justify-center py-12 text-center text-sm text-slate-500">
-                  No updates yet. Check back soon — Ezra will post project updates,
-                  recordings, and notes here.
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="grid gap-4 lg:grid-cols-2">
-                {workspaceUpdates.map((update) => (
-                  <UpdateCard
-                    key={update.id}
-                    update={update}
-                    uid={user?.uid ?? ""}
-                    workspaceId={params.workspaceId}
-                    getToken={getWorkspaceUpdateToken}
-                  />
-                ))}
+              {statusVideosLoading ? (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {[0, 1].map((index) => (
+                    <Card key={`status-video-skeleton-${index}`}>
+                      <CardHeader>
+                        <div className="h-5 w-2/3 animate-pulse rounded-full bg-muted" />
+                      </CardHeader>
+                      <CardContent>
+                        <div className="aspect-video w-full animate-pulse rounded-xl bg-muted" />
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              ) : statusVideos.length === 0 ? (
+                <Card>
+                  <CardContent className="flex items-center justify-center py-10 text-center text-sm text-slate-500">
+                    No build videos yet. New screen recordings named for you appear here
+                    automatically once they finish processing.
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {statusVideos.map((video) => (
+                    <StatusVideoCard key={video.id} video={video} />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Manual notes & links posted by the team */}
+            {updatesLoading || workspaceUpdates.length > 0 ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold text-slate-700">Notes &amp; Updates</h3>
+                </div>
+                {updatesLoading ? (
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    {[0, 1].map((index) => (
+                      <Card key={`updates-skeleton-${index}`}>
+                        <CardHeader>
+                          <div className="h-4 w-24 animate-pulse rounded-full bg-muted" />
+                          <div className="h-5 w-2/3 animate-pulse rounded-full bg-muted" />
+                          <div className="h-4 w-full animate-pulse rounded-full bg-muted" />
+                        </CardHeader>
+                        <CardContent>
+                          <div className="aspect-video w-full animate-pulse rounded-xl bg-muted" />
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    {workspaceUpdates.map((update) => (
+                      <UpdateCard
+                        key={update.id}
+                        update={update}
+                        uid={user?.uid ?? ""}
+                        workspaceId={params.workspaceId}
+                        getToken={getWorkspaceUpdateToken}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            ) : null}
           </div>
         </TabsContent>
 
@@ -5259,6 +5359,58 @@ function UpdateCard({
             Watch / View Update
           </a>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * Renders one auto-matched build video from the Drive pipeline.
+ * `videoUrl` is a direct (signed) MP4, so it plays inline via a native <video>.
+ * `aiSummary` is a list of client-friendly bullets (older docs may store a string).
+ */
+function StatusVideoCard({ video }: { video: ClientStatusVideo }) {
+  const summary = Array.isArray(video.aiSummary)
+    ? video.aiSummary.filter((point) => typeof point === "string" && point.trim())
+    : typeof video.aiSummary === "string" && video.aiSummary.trim()
+      ? [video.aiSummary.trim()]
+      : []
+
+  const created = video.createdAt ? new Date(video.createdAt) : null
+  const createdLabel =
+    created && !Number.isNaN(created.getTime()) ? created.toLocaleDateString() : ""
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-2">
+          <CardTitle className="text-base">{video.title}</CardTitle>
+          {createdLabel ? (
+            <span className="whitespace-nowrap text-xs text-muted-foreground">{createdLabel}</span>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="aspect-video w-full overflow-hidden rounded-xl bg-black">
+          {video.videoUrl ? (
+            <video
+              src={video.videoUrl}
+              controls
+              preload="metadata"
+              className="h-full w-full"
+            />
+          ) : null}
+        </div>
+        {summary.length > 0 ? (
+          <ul className="space-y-1 text-sm text-slate-600">
+            {summary.map((point, index) => (
+              <li key={index} className="flex gap-2">
+                <span className="text-primary">•</span>
+                <span>{point}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </CardContent>
     </Card>
   )

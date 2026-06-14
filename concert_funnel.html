@@ -1,0 +1,942 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=1080, initial-scale=1" />
+  <title>Autocatalytic Concert Funnel</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <style>
+    :root {
+      --bg: #06080d;
+      --ink: #f8fbff;
+      --muted: #8d9aaf;
+      --line: rgba(255, 255, 255, 0.14);
+      --line-strong: rgba(255, 255, 255, 0.28);
+      --blue: #5ee7ff;
+      --cyan: #7cfbdf;
+      --green: #7effb2;
+      --gold: #ffd66e;
+      --orange: #ff7b4a;
+      --pink: #ff5fa2;
+      --purple: #8f7dff;
+      --panel: rgba(14, 19, 32, 0.74);
+      --panel-strong: rgba(18, 26, 44, 0.9);
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --display: "SF Pro Display", Inter, ui-sans-serif, system-ui, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 1080px;
+      height: 1920px;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font);
+    }
+
+    body {
+      position: relative;
+    }
+
+    .stage {
+      position: relative;
+      width: 1080px;
+      height: 1920px;
+      overflow: hidden;
+      isolation: isolate;
+      background:
+        radial-gradient(circle at 18% 10%, rgba(94, 231, 255, 0.18), transparent 34%),
+        radial-gradient(circle at 84% 16%, rgba(255, 95, 162, 0.13), transparent 30%),
+        radial-gradient(circle at 50% 72%, rgba(126, 255, 178, 0.11), transparent 38%),
+        linear-gradient(180deg, #070912 0%, #06080d 44%, #090b12 100%);
+    }
+
+    .noise {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      opacity: 0.22;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+      background-size: 36px 36px;
+      mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.35));
+    }
+
+    .aurora {
+      position: absolute;
+      inset: -220px -180px;
+      z-index: 0;
+      opacity: 0.62;
+      background:
+        conic-gradient(from 90deg at 28% 24%, transparent, rgba(94, 231, 255, 0.24), transparent 29%),
+        conic-gradient(from 250deg at 72% 18%, transparent, rgba(255, 123, 74, 0.22), transparent 32%),
+        conic-gradient(from 15deg at 52% 72%, transparent, rgba(143, 125, 255, 0.22), transparent 35%);
+      filter: blur(38px);
+      transform: rotate(0deg);
+    }
+
+    .top-brand {
+      position: absolute;
+      top: 54px;
+      left: 64px;
+      right: 64px;
+      z-index: 8;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      opacity: 0.92;
+    }
+
+    .brand-mark {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      color: var(--ink);
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    .logo {
+      width: 46px;
+      height: 46px;
+      border-radius: 14px;
+      background:
+        radial-gradient(circle at 30% 30%, #fff 0 12%, transparent 13%),
+        linear-gradient(135deg, #ff714d, #e94b7f 52%, #5ee7ff);
+      box-shadow: 0 0 34px rgba(94, 231, 255, 0.28);
+    }
+
+    .timecode {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 12px 18px;
+      background: rgba(255, 255, 255, 0.055);
+      color: #c8d2e3;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      backdrop-filter: blur(22px);
+    }
+
+    .frame {
+      position: absolute;
+      inset: 0;
+      z-index: 4;
+      padding: 148px 64px 286px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .frame-inner {
+      position: relative;
+      height: 100%;
+    }
+
+    .eyebrow {
+      color: var(--blue);
+      font-size: 22px;
+      font-weight: 900;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+    }
+
+    .headline {
+      margin: 18px 0 0;
+      max-width: 920px;
+      font-family: var(--display);
+      font-size: 92px;
+      line-height: 0.92;
+      letter-spacing: -0.04em;
+      font-weight: 900;
+      text-wrap: balance;
+    }
+
+    .subhead {
+      margin: 28px 0 0;
+      max-width: 880px;
+      color: #c6d0df;
+      font-size: 34px;
+      line-height: 1.25;
+      letter-spacing: -0.02em;
+      font-weight: 650;
+    }
+
+    .portal-shell {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 72px;
+      height: 760px;
+      border: 1px solid var(--line-strong);
+      border-radius: 42px;
+      padding: 28px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
+        rgba(8, 12, 20, 0.86);
+      box-shadow:
+        0 34px 120px rgba(0, 0, 0, 0.52),
+        inset 0 1px 0 rgba(255, 255, 255, 0.22);
+      overflow: hidden;
+    }
+
+    .portal-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px 26px;
+    }
+
+    .portal-title {
+      font-size: 22px;
+      font-weight: 900;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: #d8e2f1;
+    }
+
+    .portal-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--green);
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .pulse-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 24px var(--green);
+    }
+
+    .doors {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 14px;
+      height: 510px;
+    }
+
+    .door {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      min-width: 0;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 28px;
+      padding: 20px 14px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.105), rgba(255, 255, 255, 0.025)),
+        rgba(255, 255, 255, 0.035);
+      overflow: hidden;
+      transform-origin: 50% 100%;
+    }
+
+    .door::before {
+      content: "";
+      position: absolute;
+      inset: 12px;
+      border-radius: 22px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: linear-gradient(180deg, transparent 35%, rgba(255, 255, 255, 0.08));
+    }
+
+    .door::after {
+      content: "";
+      position: absolute;
+      inset: auto -30% -40% -30%;
+      height: 42%;
+      background: radial-gradient(circle, var(--door-color), transparent 66%);
+      opacity: 0.42;
+      filter: blur(12px);
+    }
+
+    .door-number {
+      position: absolute;
+      top: 22px;
+      left: 18px;
+      color: rgba(255, 255, 255, 0.38);
+      font-size: 18px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+    }
+
+    .door-label {
+      position: relative;
+      font-size: 22px;
+      font-weight: 900;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+    }
+
+    .door-meta {
+      position: relative;
+      margin-top: 8px;
+      color: #aab8ce;
+      font-size: 14px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    .action-strip {
+      margin-top: 22px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .action-chip {
+      border-radius: 22px;
+      padding: 20px 16px;
+      background: rgba(255, 255, 255, 0.075);
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      color: #dce7f7;
+      font-size: 19px;
+      line-height: 1.2;
+      font-weight: 900;
+      text-align: center;
+    }
+
+    .map-card {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 84px;
+      height: 930px;
+      border-radius: 48px;
+      border: 1px solid var(--line-strong);
+      background:
+        radial-gradient(circle at 50% 40%, rgba(94, 231, 255, 0.08), transparent 38%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.035)),
+        rgba(7, 11, 19, 0.82);
+      box-shadow: 0 34px 130px rgba(0, 0, 0, 0.48);
+      overflow: hidden;
+    }
+
+    .map-grid {
+      position: absolute;
+      inset: 0;
+      opacity: 0.42;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+      background-size: 70px 70px;
+      mask-image: radial-gradient(circle at 50% 45%, black, transparent 78%);
+    }
+
+    .region-label {
+      position: absolute;
+      padding: 10px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #d7e2f3;
+      font-size: 17px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+    }
+
+    .node {
+      position: absolute;
+      width: 190px;
+      height: 190px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      background:
+        radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.2), transparent 24%),
+        radial-gradient(circle, var(--node-color), rgba(255, 255, 255, 0.03) 66%);
+      box-shadow: 0 0 66px rgba(94, 231, 255, 0.16);
+    }
+
+    .node::before,
+    .node::after {
+      content: "";
+      position: absolute;
+      inset: -18px;
+      border: 1px solid var(--node-color);
+      border-radius: 50%;
+      opacity: 0.28;
+    }
+
+    .node::after {
+      inset: -42px;
+      opacity: 0.13;
+    }
+
+    .node-name {
+      position: relative;
+      font-size: 25px;
+      font-weight: 950;
+      letter-spacing: -0.02em;
+      text-align: center;
+      text-shadow: 0 2px 20px rgba(0, 0, 0, 0.42);
+    }
+
+    .node-title {
+      position: absolute;
+      top: 124px;
+      width: 230px;
+      color: #aebbd0;
+      font-size: 14px;
+      font-weight: 850;
+      letter-spacing: 0.1em;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .route {
+      position: absolute;
+      height: 3px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, transparent, rgba(94, 231, 255, 0.8), transparent);
+      transform-origin: 0 50%;
+      opacity: 0;
+    }
+
+    .install-banner {
+      position: absolute;
+      left: 54px;
+      right: 54px;
+      bottom: 54px;
+      border-radius: 30px;
+      padding: 26px 28px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.08);
+      color: #eff6ff;
+      font-size: 30px;
+      line-height: 1.18;
+      font-weight: 900;
+      letter-spacing: -0.02em;
+    }
+
+    .estate-card {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 74px;
+      height: 1000px;
+      border-radius: 54px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04)),
+        rgba(9, 12, 20, 0.9);
+      box-shadow:
+        0 34px 130px rgba(0, 0, 0, 0.54),
+        inset 0 1px 0 rgba(255, 255, 255, 0.22);
+      overflow: hidden;
+    }
+
+    .estate-sky {
+      position: absolute;
+      inset: 0 0 46%;
+      background:
+        radial-gradient(circle at 50% 10%, rgba(255, 214, 110, 0.28), transparent 30%),
+        linear-gradient(180deg, rgba(94, 231, 255, 0.13), rgba(143, 125, 255, 0.04));
+    }
+
+    .church {
+      position: absolute;
+      left: 144px;
+      right: 144px;
+      bottom: 310px;
+      height: 420px;
+      filter: drop-shadow(0 34px 50px rgba(0, 0, 0, 0.45));
+    }
+
+    .church-base {
+      position: absolute;
+      left: 80px;
+      right: 80px;
+      bottom: 0;
+      height: 210px;
+      border-radius: 24px 24px 12px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.06)),
+        #1b2233;
+    }
+
+    .church-roof {
+      position: absolute;
+      left: 50px;
+      right: 50px;
+      bottom: 192px;
+      height: 120px;
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+      background: linear-gradient(135deg, #ff7b4a, #ffd66e);
+    }
+
+    .church-tower {
+      position: absolute;
+      left: 50%;
+      bottom: 134px;
+      width: 132px;
+      height: 250px;
+      transform: translateX(-50%);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 24px 24px 10px 10px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.06)),
+        #20283c;
+    }
+
+    .church-spire {
+      position: absolute;
+      left: 50%;
+      bottom: 360px;
+      width: 112px;
+      height: 160px;
+      transform: translateX(-50%);
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+      background: linear-gradient(180deg, #7cfbdf, #5ee7ff);
+      box-shadow: 0 0 52px rgba(94, 231, 255, 0.36);
+    }
+
+    .window {
+      position: absolute;
+      width: 54px;
+      height: 88px;
+      border-radius: 999px 999px 12px 12px;
+      background: linear-gradient(180deg, rgba(126, 251, 223, 0.8), rgba(94, 231, 255, 0.18));
+      box-shadow: 0 0 28px rgba(94, 231, 255, 0.28);
+    }
+
+    .window.w1 { left: 154px; bottom: 52px; }
+    .window.w2 { right: 154px; bottom: 52px; }
+    .window.w3 { left: 50%; bottom: 196px; width: 42px; height: 68px; transform: translateX(-50%); }
+
+    .estate-label {
+      position: absolute;
+      left: 54px;
+      right: 54px;
+      bottom: 56px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .target-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      border-radius: 30px;
+      padding: 24px 26px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .target-title {
+      color: #eaf1fb;
+      font-size: 28px;
+      line-height: 1.08;
+      font-weight: 950;
+      letter-spacing: -0.03em;
+    }
+
+    .target-meta {
+      margin-top: 8px;
+      color: #9aa9bf;
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .target-badge {
+      min-width: 188px;
+      border-radius: 999px;
+      padding: 18px 20px;
+      background: linear-gradient(135deg, rgba(126, 255, 178, 0.24), rgba(94, 231, 255, 0.13));
+      color: var(--green);
+      text-align: center;
+      font-size: 18px;
+      font-weight: 950;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border: 1px solid rgba(126, 255, 178, 0.3);
+    }
+
+    .ticker {
+      position: absolute;
+      left: 44px;
+      right: 44px;
+      bottom: 46px;
+      z-index: 20;
+      border-radius: 38px;
+      padding: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.065)),
+        rgba(8, 13, 24, 0.92);
+      box-shadow:
+        0 26px 100px rgba(0, 0, 0, 0.58),
+        inset 0 1px 0 rgba(255, 255, 255, 0.24);
+      backdrop-filter: blur(24px);
+      overflow: hidden;
+    }
+
+    .ticker-shine {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(94, 231, 255, 0.16), transparent);
+      transform: translateX(-100%);
+      pointer-events: none;
+    }
+
+    .ticker-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      color: #dbe7f6;
+      font-size: 16px;
+      font-weight: 950;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .ticker-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    .ticker-row {
+      display: grid;
+      grid-template-columns: 1.04fr 0.96fr;
+      align-items: center;
+      gap: 14px;
+      border-radius: 24px;
+      padding: 16px 18px;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.095);
+    }
+
+    .ticker-label {
+      color: #aebbd0;
+      font-size: 18px;
+      font-weight: 850;
+      letter-spacing: 0.03em;
+    }
+
+    .ticker-value {
+      justify-self: end;
+      color: #ffffff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 28px;
+      font-weight: 950;
+      letter-spacing: -0.04em;
+      text-shadow: 0 0 24px rgba(94, 231, 255, 0.24);
+    }
+
+    .progress {
+      position: absolute;
+      left: 24px;
+      right: 24px;
+      bottom: 18px;
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--blue), var(--green), var(--gold));
+      box-shadow: 0 0 22px rgba(126, 255, 178, 0.45);
+    }
+  </style>
+</head>
+<body>
+  <main
+    class="stage"
+    data-composition-id="concert-funnel"
+    data-start="0"
+    data-duration="30"
+    data-width="1080"
+    data-height="1920"
+    data-track-index="0"
+  >
+    <div class="aurora"></div>
+    <div class="noise"></div>
+
+    <header class="top-brand">
+      <div class="brand-mark">
+        <div class="logo"></div>
+        Autocatalytic Concert
+      </div>
+      <div class="timecode">30s Loop</div>
+    </header>
+
+    <section class="frame frame-directives">
+      <div class="frame-inner">
+        <div class="eyebrow directives-kicker">Frame 01 / Directives</div>
+        <h1 class="headline directives-title">Five Doors Portal</h1>
+        <p class="subhead directives-copy">Choose Your Door: Learn ($40), Earn (Sweat Equity), or Teach (Expert Node).</p>
+
+        <div class="portal-shell">
+          <div class="portal-top">
+            <div class="portal-title">Five Doors Portal</div>
+            <div class="portal-status"><span class="pulse-dot"></span>Live Intake</div>
+          </div>
+          <div class="doors">
+            <div class="door door-learn" style="--door-color:#5ee7ff">
+              <div class="door-number">01</div>
+              <div class="door-label">Learn</div>
+              <div class="door-meta">$40 knowledge pass</div>
+            </div>
+            <div class="door door-earn" style="--door-color:#7effb2">
+              <div class="door-number">02</div>
+              <div class="door-label">Earn</div>
+              <div class="door-meta">Sweat equity slot</div>
+            </div>
+            <div class="door door-teach" style="--door-color:#ffd66e">
+              <div class="door-number">03</div>
+              <div class="door-label">Teach</div>
+              <div class="door-meta">Expert node signal</div>
+            </div>
+            <div class="door" style="--door-color:#ff5fa2">
+              <div class="door-number">04</div>
+              <div class="door-label">Fund</div>
+              <div class="door-meta">Wallet liquidity</div>
+            </div>
+            <div class="door" style="--door-color:#8f7dff">
+              <div class="door-number">05</div>
+              <div class="door-label">Host</div>
+              <div class="door-meta">Regional venue</div>
+            </div>
+          </div>
+          <div class="action-strip">
+            <div class="action-chip action-learn">Learn / $40</div>
+            <div class="action-chip action-earn">Earn / Sweat Equity</div>
+            <div class="action-chip action-teach">Teach / Expert Node</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="frame frame-roster">
+      <div class="frame-inner">
+        <div class="eyebrow roster-kicker">Frame 02 / Roster Integration</div>
+        <h1 class="headline roster-title">Regional Anchor Nodes</h1>
+        <p class="subhead roster-copy">Kerrington, Schneider, and Evan install the operating mesh.</p>
+
+        <div class="map-card">
+          <div class="map-grid"></div>
+          <div class="region-label" style="left:72px; top:92px;">GA</div>
+          <div class="region-label" style="left:274px; top:210px;">IL</div>
+          <div class="region-label" style="left:480px; top:388px;">MO</div>
+          <div class="region-label" style="right:164px; top:156px;">NY</div>
+          <div class="region-label" style="right:94px; bottom:230px;">FL</div>
+
+          <div class="route route-a" style="left:248px; top:370px; width:372px; transform:rotate(22deg);"></div>
+          <div class="route route-b" style="left:360px; top:570px; width:352px; transform:rotate(-34deg);"></div>
+          <div class="route route-c" style="left:214px; top:642px; width:560px; transform:rotate(4deg);"></div>
+
+          <div class="node node-kerrington" style="--node-color:rgba(94,231,255,0.66); left:106px; top:272px;">
+            <div class="node-name">Kerrington</div>
+            <div class="node-title">Regional Manager</div>
+          </div>
+          <div class="node node-schneider" style="--node-color:rgba(126,255,178,0.62); right:106px; top:250px;">
+            <div class="node-name">Schneider</div>
+            <div class="node-title">Anchor Operator</div>
+          </div>
+          <div class="node node-evan" style="--node-color:rgba(255,214,110,0.64); left:50%; top:558px; transform:translateX(-50%);">
+            <div class="node-name">Evan</div>
+            <div class="node-title">Market Installer</div>
+          </div>
+
+          <div class="install-banner">Installing Regional Managers across GA, IL, MO, NY, FL.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="frame frame-estate">
+      <div class="frame-inner">
+        <div class="eyebrow estate-kicker">Frame 03 / BEAM Grounds Target</div>
+        <h1 class="headline estate-title">Crowdfund the Grounds</h1>
+        <p class="subhead estate-copy">Convert roster activity into real estate acquisition momentum.</p>
+
+        <div class="estate-card">
+          <div class="estate-sky"></div>
+          <div class="church">
+            <div class="church-spire"></div>
+            <div class="church-tower"></div>
+            <div class="church-roof"></div>
+            <div class="church-base">
+              <div class="window w1"></div>
+              <div class="window w2"></div>
+              <div class="window w3"></div>
+            </div>
+          </div>
+          <div class="estate-label">
+            <div class="target-row">
+              <div>
+                <div class="target-title">Central UMC / Zhao MKE Church</div>
+                <div class="target-meta">BEAM Grounds acquisition target</div>
+              </div>
+              <div class="target-badge">Crowdfund</div>
+            </div>
+            <div class="target-row">
+              <div>
+                <div class="target-title">Concert model routes attention into ownership.</div>
+                <div class="target-meta">Learn -> Earn -> Teach -> Fund -> Host</div>
+              </div>
+              <div class="target-badge">Loop Active</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="ticker">
+      <div class="ticker-shine"></div>
+      <div class="ticker-title">
+        <span>Progress Ticker</span>
+        <span>Real-Time Value Creation</span>
+      </div>
+      <div class="ticker-grid">
+        <div class="ticker-row">
+          <div class="ticker-label">Roster Capacity</div>
+          <div class="ticker-value"><span id="rosterCount">0</span>% Loaded</div>
+        </div>
+        <div class="ticker-row">
+          <div class="ticker-label">BEAM Wallet Volume</div>
+          <div class="ticker-value">$<span id="walletCount">0</span> Active</div>
+        </div>
+        <div class="ticker-row">
+          <div class="ticker-label">Real Estate Target</div>
+          <div class="ticker-value">$<span id="estateCount">0</span> Remaining</div>
+        </div>
+      </div>
+      <div class="progress"><div class="progress-bar"></div></div>
+    </aside>
+  </main>
+
+  <script>
+    const fmt = new Intl.NumberFormat("en-US");
+    const counters = { roster: 0, wallet: 0, estate: 46000 };
+    const rosterEl = document.getElementById("rosterCount");
+    const walletEl = document.getElementById("walletCount");
+    const estateEl = document.getElementById("estateCount");
+
+    function renderCounters() {
+      rosterEl.textContent = Math.round(counters.roster);
+      walletEl.textContent = fmt.format(Math.round(counters.wallet));
+      estateEl.textContent = fmt.format(Math.round(counters.estate));
+    }
+
+    renderCounters();
+
+    gsap.set(".frame-directives", { opacity: 1 });
+    gsap.set(".frame-roster, .frame-estate", { opacity: 0 });
+    gsap.set([".directives-kicker", ".directives-title", ".directives-copy", ".portal-shell"], { y: 28, opacity: 0 });
+    gsap.set(".door", { y: 90, opacity: 0, rotateX: -18 });
+    gsap.set(".action-chip", { y: 28, opacity: 0 });
+    gsap.set([".roster-kicker", ".roster-title", ".roster-copy", ".map-card"], { y: 34, opacity: 0 });
+    gsap.set(".node", { scale: 0.68, opacity: 0 });
+    gsap.set(".region-label", { opacity: 0, y: 12 });
+    gsap.set(".install-banner", { opacity: 0, y: 36 });
+    gsap.set([".estate-kicker", ".estate-title", ".estate-copy", ".estate-card"], { y: 34, opacity: 0 });
+    gsap.set(".church", { y: 90, scale: 0.92, opacity: 0 });
+    gsap.set(".church-spire", { transformOrigin: "50% 100%" });
+    gsap.set(".target-row", { y: 34, opacity: 0 });
+
+    const loop = gsap.timeline({
+      paused: true,
+      defaults: { ease: "power3.out" },
+    });
+
+    loop
+      .to(".aurora", { rotate: 15, scale: 1.04, duration: 30, ease: "none" }, 0)
+      .to(".ticker-shine", { x: "200%", duration: 3.75, repeat: 7, ease: "none" }, 0)
+      .to(".progress-bar", { width: "100%", duration: 30, ease: "none" }, 0)
+      .to(counters, {
+        roster: 65,
+        wallet: 14230,
+        estate: 35770,
+        duration: 30,
+        ease: "none",
+        onUpdate: renderCounters
+      }, 0)
+
+      /* Frame 1: Directives, 0-6s */
+      .to([".directives-kicker", ".directives-title", ".directives-copy"], {
+        y: 0,
+        opacity: 1,
+        duration: 0.8,
+        stagger: 0.12
+      }, 0.2)
+      .to(".portal-shell", { y: 0, opacity: 1, duration: 0.9 }, 0.78)
+      .to(".door", {
+        y: 0,
+        opacity: 1,
+        rotateX: 0,
+        duration: 0.72,
+        stagger: 0.08
+      }, 1.25)
+      .to(".action-chip", { y: 0, opacity: 1, duration: 0.52, stagger: 0.08 }, 2.2)
+      .to(".door-learn", { scale: 1.08, borderColor: "rgba(94,231,255,0.75)", duration: 0.42, yoyo: true, repeat: 1 }, 2.75)
+      .to(".door-earn", { scale: 1.08, borderColor: "rgba(126,255,178,0.75)", duration: 0.42, yoyo: true, repeat: 1 }, 3.35)
+      .to(".door-teach", { scale: 1.08, borderColor: "rgba(255,214,110,0.78)", duration: 0.42, yoyo: true, repeat: 1 }, 3.95)
+      .to(".pulse-dot", { scale: 1.45, duration: 0.5, yoyo: true, repeat: 7, ease: "sine.inOut" }, 1.0)
+      .to(".frame-directives", { opacity: 0, duration: 0.6, ease: "power2.inOut" }, 5.55)
+
+      /* Frame 2: Roster Integration, 6-15s */
+      .to(".frame-roster", { opacity: 1, duration: 0.1 }, 6.0)
+      .to([".roster-kicker", ".roster-title", ".roster-copy"], {
+        y: 0,
+        opacity: 1,
+        duration: 0.72,
+        stagger: 0.12
+      }, 6.12)
+      .to(".map-card", { y: 0, opacity: 1, duration: 0.8 }, 6.75)
+      .to(".region-label", { opacity: 1, y: 0, duration: 0.5, stagger: 0.08 }, 7.15)
+      .to(".node", { opacity: 1, scale: 1, duration: 0.72, stagger: 0.16, ease: "back.out(1.7)" }, 7.55)
+      .to(".route", { opacity: 1, duration: 0.42, stagger: 0.12 }, 8.2)
+      .to(".node", { boxShadow: "0 0 88px rgba(94,231,255,0.24)", duration: 1.2, yoyo: true, repeat: 5, ease: "sine.inOut" }, 8.25)
+      .to(".install-banner", { opacity: 1, y: 0, duration: 0.7 }, 9.0)
+      .to(".map-card", { scale: 1.025, duration: 5.6, ease: "sine.inOut" }, 8.9)
+      .to(".frame-roster", { opacity: 0, duration: 0.72, ease: "power2.inOut" }, 14.35)
+
+      /* Frame 3: BEAM Grounds Target, 15-30s */
+      .to(".frame-estate", { opacity: 1, duration: 0.1 }, 15.0)
+      .to([".estate-kicker", ".estate-title", ".estate-copy"], {
+        y: 0,
+        opacity: 1,
+        duration: 0.76,
+        stagger: 0.12
+      }, 15.15)
+      .to(".estate-card", { y: 0, opacity: 1, duration: 0.9 }, 15.85)
+      .to(".church", { y: 0, scale: 1, opacity: 1, duration: 1.05, ease: "back.out(1.4)" }, 16.65)
+      .to(".church-spire", { scaleY: 1.08, duration: 1.2, yoyo: true, repeat: 8, ease: "sine.inOut" }, 17.1)
+      .to(".target-row", { y: 0, opacity: 1, duration: 0.72, stagger: 0.16 }, 18.1)
+      .to(".estate-card", { scale: 1.025, duration: 9.8, ease: "sine.inOut" }, 19.0)
+      .to(".target-badge", { scale: 1.08, duration: 0.6, yoyo: true, repeat: 8, ease: "sine.inOut" }, 20.0)
+      .to(".frame-estate", { opacity: 0, duration: 0.8, ease: "power2.inOut" }, 29.15);
+
+    window.__timelines = window.__timelines || {};
+    window.__timelines["concert-funnel"] = loop;
+    window.__HYPERFRAMES_READY = true;
+  </script>
+</body>
+</html>
