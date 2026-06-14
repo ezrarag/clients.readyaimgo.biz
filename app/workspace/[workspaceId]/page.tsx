@@ -332,6 +332,18 @@ interface ClientStatusVideo {
   createdAt?: string | null
 }
 
+interface ClientStatusVideoNote {
+  id: string
+  body: string
+  authorUid?: string
+  authorEmail?: string | null
+  authorName: string
+  role: string
+  source: string
+  resolved: boolean
+  createdAt?: string | null
+}
+
 const PROJECT_ROLE_ORDER: WorkspaceRole[] = [
   "owner",
   "developer",
@@ -4107,7 +4119,12 @@ export default function WorkspacePage() {
               ) : (
                 <div className="grid gap-4 lg:grid-cols-2">
                   {statusVideos.map((video) => (
-                    <StatusVideoCard key={video.id} video={video} />
+                    <StatusVideoCard
+                      key={video.id}
+                      video={video}
+                      workspaceId={params.workspaceId}
+                      getToken={() => user!.getIdToken()}
+                    />
                   ))}
                 </div>
               )}
@@ -5369,16 +5386,92 @@ function UpdateCard({
  * `videoUrl` is a direct (signed) MP4, so it plays inline via a native <video>.
  * `aiSummary` is a list of client-friendly bullets (older docs may store a string).
  */
-function StatusVideoCard({ video }: { video: ClientStatusVideo }) {
+function StatusVideoCard({
+  video,
+  workspaceId,
+  getToken,
+}: {
+  video: ClientStatusVideo
+  workspaceId: string
+  getToken: () => Promise<string>
+}) {
   const summary = Array.isArray(video.aiSummary)
     ? video.aiSummary.filter((point) => typeof point === "string" && point.trim())
     : typeof video.aiSummary === "string" && video.aiSummary.trim()
       ? [video.aiSummary.trim()]
       : []
+  const [notes, setNotes] = useState<ClientStatusVideoNote[]>([])
+  const [notesLoading, setNotesLoading] = useState(true)
+  const [noteBody, setNoteBody] = useState("")
+  const [noteSaving, setNoteSaving] = useState(false)
+  const [noteError, setNoteError] = useState<string | null>(null)
 
   const created = video.createdAt ? new Date(video.createdAt) : null
   const createdLabel =
     created && !Number.isNaN(created.getTime()) ? created.toLocaleDateString() : ""
+  const notesEndpoint = `/api/workspaces/${encodeURIComponent(workspaceId)}/status-videos/${encodeURIComponent(video.id)}/notes`
+
+  useEffect(() => {
+    let cancelled = false
+    setNotesLoading(true)
+    setNoteError(null)
+
+    getToken()
+      .then((token) =>
+        fetch(notesEndpoint, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        })
+      )
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`status ${res.status}`))))
+      .then((data) => {
+        if (cancelled) return
+        setNotes(Array.isArray(data?.notes) ? data.notes : [])
+        setNotesLoading(false)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setNotes([])
+        setNotesLoading(false)
+        setNoteError(error instanceof Error ? "Unable to load notes." : "Unable to load notes.")
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [getToken, notesEndpoint])
+
+  const submitNote = async () => {
+    const body = noteBody.trim()
+    if (!body || noteSaving) return
+
+    setNoteSaving(true)
+    setNoteError(null)
+
+    try {
+      const token = await getToken()
+      const res = await fetch(notesEndpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ body }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data?.error || "Unable to save note.")
+      }
+      if (data?.note) {
+        setNotes((current) => [...current, data.note as ClientStatusVideoNote])
+      }
+      setNoteBody("")
+    } catch (error) {
+      setNoteError(error instanceof Error ? error.message : "Unable to save note.")
+    } finally {
+      setNoteSaving(false)
+    }
+  }
 
   return (
     <Card>
@@ -5411,6 +5504,76 @@ function StatusVideoCard({ video }: { video: ClientStatusVideo }) {
             ))}
           </ul>
         ) : null}
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-primary" />
+              <h4 className="text-sm font-semibold text-slate-700">Notes for this update</h4>
+            </div>
+            {notes.length > 0 ? (
+              <Badge variant="secondary" className="rounded-full">
+                {notes.length}
+              </Badge>
+            ) : null}
+          </div>
+          {notesLoading ? (
+            <div className="space-y-2">
+              <div className="h-4 w-2/3 animate-pulse rounded-full bg-slate-200" />
+              <div className="h-4 w-1/2 animate-pulse rounded-full bg-slate-200" />
+            </div>
+          ) : notes.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              Add feedback or questions here so the build team can carry them into the next coding pass.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {notes.map((note) => {
+                const noteDate = note.createdAt ? new Date(note.createdAt) : null
+                const noteDateLabel =
+                  noteDate && !Number.isNaN(noteDate.getTime())
+                    ? noteDate.toLocaleString([], {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })
+                    : ""
+
+                return (
+                  <div key={note.id} className="rounded-lg bg-white p-3 text-sm shadow-sm">
+                    <div className="mb-1 flex items-center justify-between gap-2 text-xs text-slate-500">
+                      <span className="font-medium text-slate-700">{note.authorName}</span>
+                      {noteDateLabel ? <span>{noteDateLabel}</span> : null}
+                    </div>
+                    <p className="whitespace-pre-wrap leading-6 text-slate-700">{note.body}</p>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          <div className="mt-3 space-y-2">
+            <Textarea
+              value={noteBody}
+              onChange={(event) => setNoteBody(event.target.value)}
+              placeholder="Leave a note or revision request for this build video..."
+              className="min-h-[88px] bg-white"
+              maxLength={2000}
+            />
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-slate-500">{noteBody.trim().length}/2000</p>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void submitNote()}
+                disabled={!noteBody.trim() || noteSaving}
+              >
+                {noteSaving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+                Add note
+              </Button>
+            </div>
+            {noteError ? <p className="text-xs text-red-600">{noteError}</p> : null}
+          </div>
+        </div>
       </CardContent>
     </Card>
   )
