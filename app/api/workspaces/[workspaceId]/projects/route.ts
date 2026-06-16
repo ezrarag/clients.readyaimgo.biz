@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { FieldValue } from "firebase-admin/firestore"
 
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin"
 import { getBearerToken } from "@/lib/portal-auth"
@@ -159,5 +160,100 @@ export async function GET(
     }
     console.error("GET /workspaces/[workspaceId]/projects error:", error)
     return NextResponse.json({ error: "Unable to load workspace projects." }, { status: 500 })
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { workspaceId: string } }
+) {
+  try {
+    const idToken = getBearerToken(request)
+    if (!idToken) return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
+
+    const decoded = await getAdminAuth().verifyIdToken(idToken)
+    const db = getAdminDb()
+
+    await assertWorkspaceRole(db, params.workspaceId, decoded.uid, "beam-participant")
+
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const projectId = typeof body.projectId === "string" ? body.projectId.trim() : ""
+    if (!projectId) {
+      return NextResponse.json({ error: "projectId is required." }, { status: 400 })
+    }
+
+    const workspaceRef = db.collection("workspaces").doc(params.workspaceId)
+    const workspaceSnap = await workspaceRef.get()
+    if (!workspaceSnap.exists) {
+      return NextResponse.json({ error: "Workspace not found." }, { status: 404 })
+    }
+
+    const wsData = workspaceSnap.data() as Record<string, unknown>
+    const removedProjectIds = [projectId]
+
+    const attachedRepos = Array.isArray(wsData.repos)
+      ? (wsData.repos as unknown[]).filter(
+          (item): item is Record<string, unknown> =>
+            typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).id === "number"
+        )
+      : []
+    const attachedVercel = Array.isArray(wsData.vercelProjects)
+      ? (wsData.vercelProjects as unknown[]).filter(
+          (item): item is Record<string, unknown> =>
+            typeof item === "object" && item !== null && typeof (item as Record<string, unknown>).id === "string"
+        )
+      : []
+
+    const repoMatch = attachedRepos.find((repo) => githubProjectId(params.workspaceId, repo) === projectId)
+    if (repoMatch) {
+      await workspaceRef.update({
+        repos: attachedRepos.filter((repo) => githubProjectId(params.workspaceId, repo) !== projectId),
+        projectIds: FieldValue.arrayRemove(projectId),
+        updatedAt: new Date().toISOString(),
+      })
+      return NextResponse.json({ success: true, removedProjectIds })
+    }
+
+    const vercelMatch = attachedVercel.find((project) => vercelProjectId(params.workspaceId, project) === projectId)
+    if (vercelMatch) {
+      await workspaceRef.update({
+        vercelProjects: attachedVercel.filter((project) => vercelProjectId(params.workspaceId, project) !== projectId),
+        projectIds: FieldValue.arrayRemove(projectId),
+        updatedAt: new Date().toISOString(),
+      })
+      return NextResponse.json({ success: true, removedProjectIds })
+    }
+
+    const projectRef = db.collection("projects").doc(projectId)
+    const projectSnap = await projectRef.get()
+    if (!projectSnap.exists) {
+      return NextResponse.json({ error: "Project not found." }, { status: 404 })
+    }
+
+    const projectData = projectSnap.data() as Record<string, unknown>
+    const workspaceMatches = projectData.workspaceId === params.workspaceId
+    const workspaceClientId = typeof wsData.clientId === "string" ? wsData.clientId.trim().toLowerCase() : ""
+    const projectClientId =
+      typeof projectData.clientId === "string" ? projectData.clientId.trim().toLowerCase() : ""
+
+    if (!workspaceMatches && (!workspaceClientId || workspaceClientId !== projectClientId)) {
+      return NextResponse.json({ error: "Project is not linked to this workspace." }, { status: 403 })
+    }
+
+    await db.runTransaction(async (transaction) => {
+      transaction.delete(projectRef)
+      transaction.update(workspaceRef, {
+        projectIds: FieldValue.arrayRemove(projectId),
+        updatedAt: new Date().toISOString(),
+      })
+    })
+
+    return NextResponse.json({ success: true, removedProjectIds })
+  } catch (error) {
+    if (error instanceof WorkspaceAuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.status })
+    }
+    console.error("DELETE /workspaces/[workspaceId]/projects error:", error)
+    return NextResponse.json({ error: "Unable to remove workspace project." }, { status: 500 })
   }
 }

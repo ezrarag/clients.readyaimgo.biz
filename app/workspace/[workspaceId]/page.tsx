@@ -344,6 +344,18 @@ interface ClientStatusVideoNote {
   createdAt?: string | null
 }
 
+interface WorkspaceMeetingRequest {
+  id: string
+  topic: string
+  requestedDate: string
+  requestedTime: string
+  timezone: string
+  notes: string
+  status: string
+  authorName: string
+  createdAt?: string | null
+}
+
 const PROJECT_ROLE_ORDER: WorkspaceRole[] = [
   "owner",
   "developer",
@@ -1090,6 +1102,16 @@ export default function WorkspacePage() {
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
   const [calendarConfigured, setCalendarConfigured] = useState(true)
   const [calendarLoading, setCalendarLoading] = useState(true)
+  const [meetingRequests, setMeetingRequests] = useState<WorkspaceMeetingRequest[]>([])
+  const [meetingRequestsLoading, setMeetingRequestsLoading] = useState(true)
+  const [meetingRequestOpen, setMeetingRequestOpen] = useState(false)
+  const [meetingRequestSaving, setMeetingRequestSaving] = useState(false)
+  const [meetingRequestForm, setMeetingRequestForm] = useState({
+    topic: "Workspace build review",
+    requestedDate: "",
+    requestedTime: "",
+    notes: "",
+  })
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -1144,6 +1166,7 @@ export default function WorkspacePage() {
   >("collaborator")
   const [loading, setLoading] = useState(true)
   const [reposBusy, setReposBusy] = useState<Set<number | string>>(new Set())
+  const [removingProjectIds, setRemovingProjectIds] = useState<Set<string>>(new Set())
   const [inviting, setInviting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
@@ -1169,6 +1192,10 @@ export default function WorkspacePage() {
     if (!user) return Promise.reject(new Error("Not signed in."))
     return user.getIdToken()
   }, [user])
+  const clientTimezone = useMemo(
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Chicago",
+    []
+  )
   const joinMeetingProvider = useMemo(() => {
     const providers =
       meetingProviders.length > 0 ? meetingProviders : workspace?.meetingProviders ?? []
@@ -1415,6 +1442,41 @@ export default function WorkspacePage() {
       })
       .finally(() => {
         if (!cancelled) setCalendarLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [params.workspaceId, user])
+
+  useEffect(() => {
+    if (!user) {
+      setMeetingRequests([])
+      setMeetingRequestsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setMeetingRequestsLoading(true)
+
+    user
+      .getIdToken()
+      .then((token) =>
+        fetch(`/api/workspaces/${encodeURIComponent(params.workspaceId)}/meeting-requests`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        })
+      )
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`status ${response.status}`))))
+      .then((data) => {
+        if (cancelled) return
+        setMeetingRequests(Array.isArray(data.meetingRequests) ? data.meetingRequests : [])
+      })
+      .catch(() => {
+        if (!cancelled) setMeetingRequests([])
+      })
+      .finally(() => {
+        if (!cancelled) setMeetingRequestsLoading(false)
       })
 
     return () => {
@@ -2274,6 +2336,73 @@ export default function WorkspacePage() {
     }
   }
 
+  const requestMeeting = async () => {
+    if (!user || meetingRequestSaving) return
+    setMeetingRequestSaving(true)
+    setError(null)
+    try {
+      const res = await apiFetch<{ meetingRequest: WorkspaceMeetingRequest }>(
+        user,
+        `/api/workspaces/${params.workspaceId}/meeting-requests`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ...meetingRequestForm,
+            timezone: clientTimezone,
+          }),
+        }
+      )
+      setMeetingRequests((current) => [res.meetingRequest, ...current])
+      setMeetingRequestForm({
+        topic: "Workspace build review",
+        requestedDate: "",
+        requestedTime: "",
+        notes: "",
+      })
+      setMeetingRequestOpen(false)
+      setMessage("Meeting request sent.")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to request meeting.")
+    } finally {
+      setMeetingRequestSaving(false)
+    }
+  }
+
+  const removeProject = async (project: WorkspaceProject) => {
+    if (!user) return
+    const confirmed = window.confirm(
+      `Remove "${projectTitle(project)}" from this workspace? This removes the backing database connection or project record.`
+    )
+    if (!confirmed) return
+
+    setRemovingProjectIds((current) => new Set(current).add(project.id))
+    setError(null)
+    try {
+      const res = await apiFetch<{ removedProjectIds: string[] }>(
+        user,
+        `/api/workspaces/${params.workspaceId}/projects`,
+        {
+          method: "DELETE",
+          body: JSON.stringify({ projectId: project.id }),
+        }
+      )
+      const removed = new Set(res.removedProjectIds ?? [project.id])
+      setChildProjects((current) => current.filter((item) => !removed.has(item.id)))
+      if (selectedProjectId && removed.has(selectedProjectId)) {
+        setSelectedProjectId(null)
+      }
+      setMessage("Project removed.")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to remove project.")
+    } finally {
+      setRemovingProjectIds((current) => {
+        const next = new Set(current)
+        next.delete(project.id)
+        return next
+      })
+    }
+  }
+
   const uploadWorkspaceFile = async (
     file: File,
     options: { category: "general" | "contract"; selectForDraft?: boolean }
@@ -2570,12 +2699,89 @@ export default function WorkspacePage() {
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <CalendarDays className="h-4 w-4" />
-                  Upcoming Meetings
-                </CardTitle>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <CalendarDays className="h-4 w-4" />
+                    Upcoming Meetings
+                  </CardTitle>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setMeetingRequestOpen((current) => !current)}
+                  >
+                    <Plus className="mr-2 h-3.5 w-3.5" />
+                    Request meeting
+                  </Button>
+                </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
+                {meetingRequestOpen ? (
+                  <div className="grid gap-3 rounded-2xl border border-border bg-slate-50/70 p-4">
+                    <div className="grid gap-3 md:grid-cols-[1fr_160px_150px]">
+                      <Input
+                        value={meetingRequestForm.topic}
+                        onChange={(event) =>
+                          setMeetingRequestForm((current) => ({
+                            ...current,
+                            topic: event.target.value,
+                          }))
+                        }
+                        placeholder="Meeting topic"
+                      />
+                      <Input
+                        type="date"
+                        value={meetingRequestForm.requestedDate}
+                        onChange={(event) =>
+                          setMeetingRequestForm((current) => ({
+                            ...current,
+                            requestedDate: event.target.value,
+                          }))
+                        }
+                      />
+                      <Input
+                        type="time"
+                        value={meetingRequestForm.requestedTime}
+                        onChange={(event) =>
+                          setMeetingRequestForm((current) => ({
+                            ...current,
+                            requestedTime: event.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    <Textarea
+                      value={meetingRequestForm.notes}
+                      onChange={(event) =>
+                        setMeetingRequestForm((current) => ({
+                          ...current,
+                          notes: event.target.value,
+                        }))
+                      }
+                      placeholder="Add context, agenda items, or questions for the build review."
+                      className="min-h-[88px]"
+                    />
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-xs text-muted-foreground">Timezone: {clientTimezone}</p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => void requestMeeting()}
+                        disabled={
+                          meetingRequestSaving ||
+                          !meetingRequestForm.requestedDate ||
+                          !meetingRequestForm.requestedTime
+                        }
+                      >
+                        {meetingRequestSaving ? (
+                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                        ) : null}
+                        Send request
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
                 {calendarLoading ? (
                   <div className="space-y-2">
                     <div className="h-10 animate-pulse rounded-lg bg-muted/40" />
@@ -2625,6 +2831,37 @@ export default function WorkspacePage() {
                     ))}
                   </div>
                 ) : null}
+
+                {meetingRequestsLoading ? (
+                  <div className="h-10 animate-pulse rounded-lg bg-muted/40" />
+                ) : meetingRequests.length > 0 ? (
+                  <div className="rounded-2xl border border-border bg-white/70 p-4">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      Pending meeting requests
+                    </p>
+                    <div className="space-y-2">
+                      {meetingRequests.map((request) => (
+                        <div
+                          key={request.id}
+                          className="flex flex-col gap-1 rounded-xl bg-slate-50 px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div>
+                            <p className="font-medium text-slate-700">{request.topic}</p>
+                            <p className="text-xs text-slate-500">
+                              {request.requestedDate} at {request.requestedTime} {request.timezone}
+                            </p>
+                            {request.notes ? (
+                              <p className="mt-1 line-clamp-2 text-xs text-slate-500">{request.notes}</p>
+                            ) : null}
+                          </div>
+                          <Badge variant="secondary" className="w-fit rounded-full">
+                            {request.status}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
 
@@ -2654,6 +2891,7 @@ export default function WorkspacePage() {
                   const assetType = parseAssetProjectType(
                     project.assetProjectType ?? project.projectType
                   )
+                  const removingProject = removingProjectIds.has(project.id)
                   return (
                     <Card
                       key={project.id}
@@ -2667,25 +2905,42 @@ export default function WorkspacePage() {
                               Business Reference: {workspaceBusinessReference(workspace)}
                             </CardDescription>
                           </div>
-                          <select
-                            value={assetType}
-                            onChange={(event) => {
-                              event.currentTarget.value = assetType
-                            }}
-                            className="h-8 shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 shadow-sm"
-                            title="This workspace is locked to its original project type. Create another workspace from /dashboard for a different type."
-                          >
-                            {ASSET_PROJECT_TYPES.map((type) => (
-                              <option
-                                key={type.value}
-                                value={type.value}
-                                disabled={type.value !== assetType}
-                              >
-                                {type.label}
-                                {type.value !== assetType ? " (create another workspace)" : ""}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <select
+                              value={assetType}
+                              onChange={(event) => {
+                                event.currentTarget.value = assetType
+                              }}
+                              className="h-8 rounded-full border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 shadow-sm"
+                              title="This workspace is locked to its original project type. Create another workspace from /dashboard for a different type."
+                            >
+                              {ASSET_PROJECT_TYPES.map((type) => (
+                                <option
+                                  key={type.value}
+                                  value={type.value}
+                                  disabled={type.value !== assetType}
+                                >
+                                  {type.label}
+                                  {type.value !== assetType ? " (create another workspace)" : ""}
+                                </option>
+                              ))}
+                            </select>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8 text-slate-400 hover:text-red-600"
+                              onClick={() => void removeProject(project)}
+                              disabled={removingProject}
+                              title="Remove this project from the workspace"
+                            >
+                              {removingProject ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                            </Button>
+                          </div>
                         </div>
                         <p className="text-xs leading-5 text-slate-400">
                           Workspace type is locked to {assetProjectTypeLabel(assetType)}.
