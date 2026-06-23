@@ -356,6 +356,16 @@ interface WorkspaceMeetingRequest {
   createdAt?: string | null
 }
 
+interface WorkspaceMessage {
+  id: string
+  body: string
+  authorUid: string
+  authorEmail: string
+  authorName: string
+  authorLabel: string | null
+  createdAt: string | null
+}
+
 const PROJECT_ROLE_ORDER: WorkspaceRole[] = [
   "owner",
   "developer",
@@ -979,7 +989,12 @@ function roleDescription(role: WorkspaceRole) {
 }
 
 function memberDisplayName(member: WorkspaceMember) {
-  return cleanDisplayValue(member.displayName) || cleanDisplayValue(member.email) || "Unnamed user"
+  return (
+    cleanDisplayValue(member.label) ||
+    cleanDisplayValue(member.displayName) ||
+    cleanDisplayValue(member.email) ||
+    "Unnamed user"
+  )
 }
 
 function memberInitial(member: WorkspaceMember) {
@@ -1141,6 +1156,7 @@ export default function WorkspacePage() {
   const [clientRecord, setClientRecord] = useState<Record<string, unknown> | null>(null)
   const [clientRecordLoading, setClientRecordLoading] = useState(false)
   const [accountPhoneDraft, setAccountPhoneDraft] = useState("")
+  const [accountSmsUpdateNotifications, setAccountSmsUpdateNotifications] = useState(false)
   const [accountPhoneSaving, setAccountPhoneSaving] = useState(false)
   const [draftForm, setDraftForm] = useState<DraftFormState>(DRAFT_FORM_DEFAULTS)
   const [drafting, setDrafting] = useState(false)
@@ -1164,6 +1180,12 @@ export default function WorkspacePage() {
   const [inviteRole, setInviteRole] = useState<
     "owner" | "developer" | "collaborator" | "employee-of-client" | "beam-participant"
   >("collaborator")
+  const [memberLabelDraft, setMemberLabelDraft] = useState("")
+  const [memberLabelSaving, setMemberLabelSaving] = useState(false)
+  const [workspaceMessages, setWorkspaceMessages] = useState<WorkspaceMessage[]>([])
+  const [workspaceMessagesLoading, setWorkspaceMessagesLoading] = useState(true)
+  const [workspaceMessageDraft, setWorkspaceMessageDraft] = useState("")
+  const [workspaceMessageSending, setWorkspaceMessageSending] = useState(false)
   const [loading, setLoading] = useState(true)
   const [reposBusy, setReposBusy] = useState<Set<number | string>>(new Set())
   const [removingProjectIds, setRemovingProjectIds] = useState<Set<string>>(new Set())
@@ -1183,6 +1205,10 @@ export default function WorkspacePage() {
     () => members.find((member) => member.uid === user?.uid) ?? null,
     [members, user?.uid]
   )
+  useEffect(() => {
+    setMemberLabelDraft(currentMember?.label ?? "")
+  }, [currentMember?.label])
+
   const canManageWorkspace = currentMember?.role === "owner" || currentMember?.role === "developer"
   const unreadCount = useMemo(
     () => (user?.uid ? workspaceUpdates.filter((update) => isUnread(update, user.uid)).length : 0),
@@ -1486,6 +1512,35 @@ export default function WorkspacePage() {
 
   useEffect(() => {
     if (!user) {
+      setWorkspaceMessages([])
+      setWorkspaceMessagesLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setWorkspaceMessagesLoading(true)
+
+    apiFetch<{ messages: WorkspaceMessage[] }>(
+      user,
+      `/api/workspaces/${params.workspaceId}/messages`
+    )
+      .then((res) => {
+        if (!cancelled) setWorkspaceMessages(res.messages)
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaceMessages([])
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceMessagesLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [params.workspaceId, user])
+
+  useEffect(() => {
+    if (!user) {
       setWorkspaceUpdates([])
       setUpdatesLoading(false)
       return
@@ -1571,6 +1626,7 @@ export default function WorkspacePage() {
         const data = snapshot.exists() ? (snapshot.data() as Record<string, unknown>) : null
         setClientRecord(data)
         setAccountPhoneDraft(typeof data?.phone === "string" ? data.phone : "")
+        setAccountSmsUpdateNotifications(data?.smsUpdateNotifications === true)
       })
       .catch((err) => {
         console.warn("Unable to load client account info:", err)
@@ -1595,12 +1651,19 @@ export default function WorkspacePage() {
         `/api/workspaces/${encodeURIComponent(params.workspaceId)}/account-info`,
         {
           method: "PATCH",
-          body: JSON.stringify({ phone: accountPhoneDraft }),
+          body: JSON.stringify({
+            phone: accountPhoneDraft,
+            smsUpdateNotifications: accountSmsUpdateNotifications,
+          }),
         }
       )
       setAccountPhoneDraft(payload.phone)
-      setClientRecord((current) => ({ ...(current ?? {}), phone: payload.phone }))
-      setMessage("Account phone updated.")
+      setClientRecord((current) => ({
+        ...(current ?? {}),
+        phone: payload.phone,
+        smsUpdateNotifications: accountSmsUpdateNotifications,
+      }))
+      setMessage("Account notification settings updated.")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to update account phone.")
     } finally {
@@ -1778,6 +1841,58 @@ export default function WorkspacePage() {
       setError(err instanceof Error ? err.message : "Unable to invite member.")
     } finally {
       setInviting(false)
+    }
+  }
+
+  const saveMemberLabel = async () => {
+    if (!user || !currentMember) return
+    setMemberLabelSaving(true)
+    setError(null)
+    try {
+      const res = await apiFetch<{ label: string | null }>(
+        user,
+        `/api/workspaces/${params.workspaceId}/members`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            targetUid: currentMember.uid,
+            label: memberLabelDraft,
+          }),
+        }
+      )
+      setMembers((current) =>
+        current.map((member) =>
+          member.uid === currentMember.uid ? { ...member, label: res.label } : member
+        )
+      )
+      setMessage("Teammate label updated.")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update teammate label.")
+    } finally {
+      setMemberLabelSaving(false)
+    }
+  }
+
+  const sendWorkspaceMessage = async () => {
+    if (!user || workspaceMessageSending || !workspaceMessageDraft.trim()) return
+    setWorkspaceMessageSending(true)
+    setError(null)
+    try {
+      const res = await apiFetch<{ message: WorkspaceMessage }>(
+        user,
+        `/api/workspaces/${params.workspaceId}/messages`,
+        {
+          method: "POST",
+          body: JSON.stringify({ body: workspaceMessageDraft }),
+        }
+      )
+      setWorkspaceMessages((current) => [...current, res.message])
+      setWorkspaceMessageDraft("")
+      setMessage("Message posted.")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to post message.")
+    } finally {
+      setWorkspaceMessageSending(false)
     }
   }
 
@@ -5209,6 +5324,36 @@ export default function WorkspacePage() {
           <div className="space-y-6">
             <Card>
               <CardHeader>
+                <CardTitle>Your teammate label</CardTitle>
+                <CardDescription>
+                  Choose the short label other workspace members see beside your notes and messages.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <Input
+                    value={memberLabelDraft}
+                    onChange={(event) => setMemberLabelDraft(event.target.value)}
+                    placeholder={currentMember?.displayName || currentMember?.email || "Your label"}
+                    maxLength={80}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void saveMemberLabel()}
+                    disabled={memberLabelSaving || !currentMember}
+                  >
+                    {memberLabelSaving ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : null}
+                    Save Label
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
                 <CardTitle>Invite a Teammate</CardTitle>
                 <CardDescription>
                   Enter a coworker&apos;s email. If they&apos;re already signed up they&apos;re added
@@ -5270,17 +5415,94 @@ export default function WorkspacePage() {
                   >
                     <div>
                       <p className="text-sm font-semibold text-slate-900">
-                        {member.displayName ?? member.email}
+                        {memberDisplayName(member)}
                       </p>
-                      {member.displayName && (
-                        <p className="text-xs text-slate-500">{member.email}</p>
-                      )}
+                      <p className="text-xs text-slate-500">
+                        {member.label && member.displayName ? `${member.displayName} · ` : ""}
+                        {member.email}
+                      </p>
                     </div>
                     <Badge variant={member.role === "owner" ? "default" : "secondary"}>
                       {member.role}
                     </Badge>
                   </div>
                 ))}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Workspace messages</CardTitle>
+                <CardDescription>
+                  Shared notes between signed-in members of this workspace.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-3 rounded-2xl border border-border bg-slate-50/70 p-3">
+                  {workspaceMessagesLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-slate-500">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading messages...
+                    </div>
+                  ) : workspaceMessages.length === 0 ? (
+                    <p className="py-4 text-center text-sm text-slate-500">
+                      No messages yet.
+                    </p>
+                  ) : (
+                    workspaceMessages.map((item) => {
+                      const created = item.createdAt ? new Date(item.createdAt) : null
+                      const createdLabel =
+                        created && !Number.isNaN(created.getTime())
+                          ? created.toLocaleString([], {
+                              month: "short",
+                              day: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })
+                          : ""
+
+                      return (
+                        <div key={item.id} className="rounded-xl bg-white p-3 text-sm shadow-sm">
+                          <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                            <span className="font-semibold text-slate-800">
+                              {item.authorLabel || item.authorName || item.authorEmail}
+                            </span>
+                            {createdLabel ? <span>{createdLabel}</span> : null}
+                          </div>
+                          <p className="whitespace-pre-wrap leading-6 text-slate-700">
+                            {item.body}
+                          </p>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <Textarea
+                    value={workspaceMessageDraft}
+                    onChange={(event) => setWorkspaceMessageDraft(event.target.value)}
+                    placeholder="Post a message to the workspace..."
+                    maxLength={2000}
+                  />
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-slate-500">
+                      {workspaceMessageDraft.trim().length}/2000
+                    </p>
+                    <Button
+                      type="button"
+                      onClick={() => void sendWorkspaceMessage()}
+                      disabled={!workspaceMessageDraft.trim() || workspaceMessageSending}
+                    >
+                      {workspaceMessageSending ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <MessageSquare className="mr-2 h-4 w-4" />
+                      )}
+                      Post Message
+                    </Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -5444,9 +5666,27 @@ export default function WorkspacePage() {
                     </Button>
                   </div>
                   <p className="text-xs leading-5 text-slate-500">
-                    Video update texts are sent to this number after a build update is
-                    processed.
+                    Save a mobile number before turning on update texts.
                   </p>
+                  <label className="flex items-start gap-3 rounded-2xl border border-border bg-slate-50/70 p-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={accountSmsUpdateNotifications}
+                      onChange={(event) =>
+                        setAccountSmsUpdateNotifications(event.target.checked)
+                      }
+                      className="mt-1 h-4 w-4 rounded border-slate-300"
+                    />
+                    <span>
+                      <span className="block font-semibold text-slate-800">
+                        Text me when a workspace update is posted
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-500">
+                        Admin-posted notes, Looms, and video updates will send a short SMS
+                        to this number when Twilio is configured.
+                      </span>
+                    </span>
+                  </label>
                 </div>
               </div>
             </section>

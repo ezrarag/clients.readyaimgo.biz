@@ -133,6 +133,7 @@ export interface WorkspaceMember {
   uid: string
   email: string
   displayName: string | null
+  label: string | null
   role: WorkspaceRole
   addedAt: string
   /**
@@ -151,6 +152,7 @@ export interface WorkspaceMemberSummary {
   uid: string
   email: string
   displayName: string | null
+  label: string | null
   role: WorkspaceRole
 }
 
@@ -477,6 +479,7 @@ export function normalizeWorkspaceMember(
     uid,
     email: typeof data.email === "string" ? data.email : "",
     displayName: typeof data.displayName === "string" ? data.displayName : null,
+    label: readString(data.label),
     role: parseWorkspaceRole(data.role) ?? "employee-of-client",
     addedAt: normalizeTimestamp(data.addedAt),
     assignedRepos: Array.isArray(data.assignedRepos)

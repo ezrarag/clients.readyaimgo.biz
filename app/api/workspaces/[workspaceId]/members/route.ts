@@ -155,10 +155,11 @@ export async function POST(
   }
 }
 
-// ─── PATCH /api/workspaces/[workspaceId]/members — change role ────────────────
+// ─── PATCH /api/workspaces/[workspaceId]/members — change role or own label ──
 //
-// Body: { targetUid: string; role: WorkspaceRole }
+// Body: { targetUid: string; role?: WorkspaceRole; label?: string | null }
 // Rules:
+//   - Any member can change their own label.
 //   - Caller must be developer or owner.
 //   - Caller cannot demote themselves (prevents accidental self-lockout).
 //   - Only owners can grant / remove the owner role.
@@ -174,21 +175,49 @@ export async function PATCH(
     const decodedToken = await getAdminAuth().verifyIdToken(idToken)
     const db = getAdminDb()
 
-    const callerRole = await assertWorkspaceRole(
-      db,
-      params.workspaceId,
-      decodedToken.uid,
-      "developer"
-    )
-
     const body = (await request.json()) as Record<string, unknown>
     const targetUid =
       typeof body.targetUid === "string" ? body.targetUid.trim() : null
     const newRole = parseWorkspaceRole(body.role)
+    const hasLabelUpdate = Object.prototype.hasOwnProperty.call(body, "label")
+    const label =
+      typeof body.label === "string" && body.label.trim()
+        ? body.label.trim().slice(0, 80)
+        : null
 
     if (!targetUid) {
       return NextResponse.json({ error: "targetUid is required." }, { status: 400 })
     }
+
+    const workspaceRef = db.collection("workspaces").doc(params.workspaceId)
+    const memberRef = workspaceRef.collection("members").doc(targetUid)
+
+    if (hasLabelUpdate && body.role === undefined) {
+      await assertWorkspaceRole(db, params.workspaceId, decodedToken.uid, "beam-participant")
+      if (targetUid !== decodedToken.uid) {
+        return NextResponse.json(
+          { error: "You can only update your own teammate label." },
+          { status: 403 }
+        )
+      }
+
+      const memberSnap = await memberRef.get()
+      if (!memberSnap.exists) {
+        return NextResponse.json(
+          { error: "Target user is not a member of this workspace." },
+          { status: 404 }
+        )
+      }
+
+      await memberRef.set(
+        { label, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true }
+      )
+      await workspaceRef.set({ updatedAt: FieldValue.serverTimestamp() }, { merge: true })
+
+      return NextResponse.json({ success: true, targetUid, label })
+    }
+
     if (!newRole) {
       return NextResponse.json(
         {
@@ -198,6 +227,13 @@ export async function PATCH(
         { status: 400 }
       )
     }
+
+    const callerRole = await assertWorkspaceRole(
+      db,
+      params.workspaceId,
+      decodedToken.uid,
+      "developer"
+    )
 
     // Prevent self-demotion
     if (targetUid === decodedToken.uid) {
@@ -210,8 +246,6 @@ export async function PATCH(
     // Role hierarchy check
     assertCanAssignRole(callerRole, newRole)
 
-    const workspaceRef = db.collection("workspaces").doc(params.workspaceId)
-    const memberRef = workspaceRef.collection("members").doc(targetUid)
     const memberSnap = await memberRef.get()
 
     if (!memberSnap.exists) {

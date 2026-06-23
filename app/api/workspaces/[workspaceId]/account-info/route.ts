@@ -112,6 +112,11 @@ export async function PATCH(
     const body = (await request.json()) as Record<string, unknown>
     const phone =
       typeof body.phone === "string" ? normalizePhoneToE164(body.phone) : undefined
+    const hasSmsPreference = Object.prototype.hasOwnProperty.call(
+      body,
+      "smsUpdateNotifications"
+    )
+    const smsUpdateNotifications = body.smsUpdateNotifications === true
 
     if (phone === undefined) {
       return NextResponse.json({ error: "phone is required." }, { status: 400 })
@@ -123,12 +128,17 @@ export async function PATCH(
     if (!clientIds.includes(clientId)) clientIds.push(clientId)
 
     for (const id of clientIds) {
-      batch.set(db.collection("clients").doc(id), { phone, updatedAt: now }, { merge: true })
+      const updates = {
+        phone,
+        ...(hasSmsPreference ? { smsUpdateNotifications } : {}),
+        updatedAt: now,
+      }
+      batch.set(db.collection("clients").doc(id), updates, { merge: true })
       batch.set(
         db.collection("clientComms").doc(id),
         {
           clientId: id,
-          phone,
+          ...updates,
           updatedAt: now,
         },
         { merge: true }
@@ -136,7 +146,12 @@ export async function PATCH(
     }
     await batch.commit()
 
-    return NextResponse.json({ success: true, phone, clientIds })
+    return NextResponse.json({
+      success: true,
+      phone,
+      smsUpdateNotifications,
+      clientIds,
+    })
   } catch (error) {
     if (error instanceof WorkspaceAuthError) {
       return NextResponse.json({ error: error.message }, { status: error.status })
