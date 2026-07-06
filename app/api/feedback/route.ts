@@ -1,7 +1,27 @@
 import { NextRequest, NextResponse } from "next/server"
-import { FieldValue } from "firebase-admin/firestore"
+import { FieldValue, type Query, type QueryDocumentSnapshot } from "firebase-admin/firestore"
 
 import { getAdminDb } from "@/lib/firebase-admin"
+
+function feedbackTimestampMillis(value: any) {
+  const date = value?.toDate?.()
+  if (date instanceof Date) return date.getTime()
+  if (typeof value === "string") {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
+function serializeFeedbackDoc(d: QueryDocumentSnapshot) {
+  const data = d.data()
+  return {
+    ...data,
+    id: d.id,
+    createdAt: data.createdAt?.toDate?.()?.toISOString() ?? null,
+    updatedAt: data.updatedAt?.toDate?.()?.toISOString() ?? null,
+  }
+}
 
 // POST /api/feedback
 export async function POST(request: NextRequest) {
@@ -128,16 +148,20 @@ export async function GET(request: NextRequest) {
     if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 })
 
     const db = getAdminDb()
-    let q = db.collection("clientFeedback").where("projectId", "==", projectId).orderBy("createdAt", "desc").limit(50)
-    if (status) q = db.collection("clientFeedback").where("projectId", "==", projectId).where("status", "==", status).orderBy("createdAt", "desc").limit(50)
+    const buildQuery = (field: "projectId" | "projectTitle") => {
+      let query: Query = db.collection("clientFeedback").where(field, "==", projectId)
+      if (status) query = query.where("status", "==", status)
+      return query.limit(50)
+    }
 
-    const snap = await q.get()
-    const feedback = snap.docs.map((d) => ({
-      ...d.data(),
-      id: d.id,
-      createdAt: d.data().createdAt?.toDate?.()?.toISOString() ?? null,
-      updatedAt: d.data().updatedAt?.toDate?.()?.toISOString() ?? null,
-    }))
+    const [byId, byTitle] = await Promise.all([buildQuery("projectId").get(), buildQuery("projectTitle").get()])
+    const byFeedbackId = new Map<string, ReturnType<typeof serializeFeedbackDoc>>()
+    for (const doc of [...byId.docs, ...byTitle.docs]) {
+      byFeedbackId.set(doc.id, serializeFeedbackDoc(doc))
+    }
+    const feedback = Array.from(byFeedbackId.values())
+      .sort((a, b) => feedbackTimestampMillis(b.createdAt) - feedbackTimestampMillis(a.createdAt))
+      .slice(0, 50)
     return NextResponse.json({ feedback })
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 })

@@ -253,6 +253,24 @@ interface WorkspaceProjectTask {
   createdByEmail?: string
 }
 
+interface WorkspaceProjectSuggestion {
+  id: string
+  projectId: string
+  projectTitle?: string
+  projectType?: string | null
+  workspaceId?: string
+  clientName?: string
+  clientEmail?: string | null
+  rawText?: string | null
+  summary?: string
+  category?: string
+  urgency?: "low" | "medium" | "high"
+  status?: string
+  source?: string
+  agentContextStatus?: string
+  createdAt?: string | null
+}
+
 interface CorrespondenceItem {
   id: string
   kind: "email" | "event"
@@ -1100,6 +1118,11 @@ export default function WorkspacePage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [projectTasks, setProjectTasks] = useState<WorkspaceProjectTask[]>([])
   const [projectTasksLoading, setProjectTasksLoading] = useState(false)
+  const [projectSuggestions, setProjectSuggestions] = useState<WorkspaceProjectSuggestion[]>([])
+  const [projectSuggestionsLoading, setProjectSuggestionsLoading] = useState(false)
+  const [projectSuggestionDraft, setProjectSuggestionDraft] = useState("")
+  const [projectSuggestionPriority, setProjectSuggestionPriority] = useState<"low" | "medium" | "high">("medium")
+  const [projectSuggestionSaving, setProjectSuggestionSaving] = useState(false)
   const [taskDrafts, setTaskDrafts] = useState<Record<string, TaskDraftState>>({})
   const [creatingTaskFor, setCreatingTaskFor] = useState<string | null>(null)
   const [correspondence, setCorrespondence] = useState<CorrespondenceItem[]>([])
@@ -1269,6 +1292,10 @@ export default function WorkspacePage() {
   const projectCards = useMemo(
     () => consolidateProjectCards(childProjects),
     [childProjects]
+  )
+  const selectedProjectCard = useMemo(
+    () => projectCards.find((project) => project.id === selectedProjectId) ?? projectCards[0] ?? null,
+    [projectCards, selectedProjectId]
   )
   const dominantType = useMemo((): AssetProjectType => {
     const counts: Record<string, number> = {}
@@ -1697,6 +1724,35 @@ export default function WorkspacePage() {
       cancelled = true
     }
   }, [params.workspaceId, selectedProjectId, user])
+
+  useEffect(() => {
+    const projectId = selectedProjectCard?.id
+    if (!user || !projectId) {
+      setProjectSuggestions([])
+      setProjectSuggestionsLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setProjectSuggestionsLoading(true)
+    apiFetch<{ suggestions: WorkspaceProjectSuggestion[] }>(
+      user,
+      `/api/workspaces/${params.workspaceId}/projects/${encodeURIComponent(projectId)}/suggestions`
+    )
+      .then((res) => {
+        if (!cancelled) setProjectSuggestions(res.suggestions ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setProjectSuggestions([])
+      })
+      .finally(() => {
+        if (!cancelled) setProjectSuggestionsLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [params.workspaceId, selectedProjectCard?.id, user])
 
   const toggleRepo = async (repo: GitHubRepo) => {
     if (!user || !workspace) return
@@ -2424,6 +2480,42 @@ export default function WorkspacePage() {
       setError(err instanceof Error ? err.message : "Unable to create task.")
     } finally {
       setCreatingTaskFor(null)
+    }
+  }
+
+  const submitProjectSuggestion = async () => {
+    if (!user || !selectedProjectCard || projectSuggestionSaving) return
+    const text = projectSuggestionDraft.trim()
+    if (!text) return
+
+    setProjectSuggestionSaving(true)
+    setError(null)
+    try {
+      const assetType = parseAssetProjectType(
+        selectedProjectCard.assetProjectType ?? selectedProjectCard.projectType
+      )
+      const res = await apiFetch<{ suggestion: WorkspaceProjectSuggestion }>(
+        user,
+        `/api/workspaces/${params.workspaceId}/projects/${encodeURIComponent(selectedProjectCard.id)}/suggestions`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            rawText: text,
+            urgency: projectSuggestionPriority,
+            projectTitle: projectTitle(selectedProjectCard),
+            projectType: assetProjectTypeLabel(assetType),
+            pageUrl: typeof window !== "undefined" ? window.location.href : undefined,
+          }),
+        }
+      )
+      setProjectSuggestions((prev) => [res.suggestion, ...prev])
+      setProjectSuggestionDraft("")
+      setProjectSuggestionPriority("medium")
+      setMessage("Project suggestion sent to the Readyaimgo team.")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to send project suggestion.")
+    } finally {
+      setProjectSuggestionSaving(false)
     }
   }
 
@@ -3334,12 +3426,120 @@ export default function WorkspacePage() {
                             </div>
                           </div>
                         ) : null}
+
+                        <div className="mt-5 border-t border-border/70 pt-4">
+                          <Button
+                            type="button"
+                            variant={selectedProjectCard?.id === project.id ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setSelectedProjectId(project.id)}
+                            className="w-full"
+                          >
+                            <MessageSquare className="mr-2 h-3.5 w-3.5" />
+                            Suggest a change
+                          </Button>
+                        </div>
                       </CardContent>
                     </Card>
                   )
                 })
               )}
             </div>
+
+            {selectedProjectCard ? (
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <MessageSquare className="h-4 w-4" />
+                        Project Suggestions
+                      </CardTitle>
+                      <CardDescription>
+                        Notes here are tied to {projectTitle(selectedProjectCard)} and routed to ReadyAimGo admin plus raCommand.
+                      </CardDescription>
+                    </div>
+                    <Badge variant="secondary">
+                      {assetProjectTypeLabel(
+                        parseAssetProjectType(
+                          selectedProjectCard.assetProjectType ?? selectedProjectCard.projectType
+                        )
+                      )}
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-3 rounded-2xl border border-border bg-slate-50/70 p-4">
+                    <Textarea
+                      value={projectSuggestionDraft}
+                      onChange={(event) => setProjectSuggestionDraft(event.target.value)}
+                      placeholder="Add a website change, project request, question, or approval note for this project."
+                      className="min-h-[110px] bg-white"
+                    />
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <label className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+                        Priority
+                        <select
+                          value={projectSuggestionPriority}
+                          onChange={(event) =>
+                            setProjectSuggestionPriority(event.target.value as "low" | "medium" | "high")
+                          }
+                          className="h-9 rounded-lg border border-border bg-white px-3 text-sm text-slate-700"
+                        >
+                          <option value="low">Low</option>
+                          <option value="medium">Medium</option>
+                          <option value="high">High</option>
+                        </select>
+                      </label>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => void submitProjectSuggestion()}
+                        disabled={projectSuggestionSaving || !projectSuggestionDraft.trim()}
+                      >
+                        {projectSuggestionSaving ? (
+                          <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <MessageSquare className="mr-2 h-3.5 w-3.5" />
+                        )}
+                        Send suggestion
+                      </Button>
+                    </div>
+                  </div>
+
+                  {projectSuggestionsLoading ? (
+                    <div className="h-16 animate-pulse rounded-2xl bg-muted/40" />
+                  ) : projectSuggestions.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-border bg-white/70 p-5 text-sm text-slate-500">
+                      No suggestions have been added for this project yet.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {projectSuggestions.slice(0, 6).map((suggestion) => (
+                        <div key={suggestion.id} className="rounded-2xl border border-border bg-white/80 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap gap-2">
+                              <Badge variant="secondary">{suggestion.urgency ?? "medium"}</Badge>
+                              <Badge variant={suggestion.status === "resolved" ? "default" : "secondary"}>
+                                {suggestion.status ?? "open"}
+                              </Badge>
+                            </div>
+                            {suggestion.createdAt ? (
+                              <span className="text-xs text-slate-400">
+                                {new Date(suggestion.createdAt).toLocaleString()}
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+                            {suggestion.rawText || suggestion.summary}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ) : null}
           </div>
         </TabsContent>
 
