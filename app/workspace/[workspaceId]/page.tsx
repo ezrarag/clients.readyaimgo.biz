@@ -121,6 +121,12 @@ interface WorkspacePaymentData {
   } | null
 }
 
+interface WorkspaceRelationshipProfile {
+  activeClientId: string
+  clientIds: string[]
+  userRole: string
+}
+
 interface WorkspaceLedgerEntry {
   id: string
   createdAt: string | null
@@ -1375,8 +1381,18 @@ export default function WorkspacePage() {
     setLoading(true)
     setError(null)
     try {
-      const [wsRes, membersRes, projectsRes, reposRes, vercelRes, contractsRes, filesRes, paymentsRes, expensesRes, commsRes, linksRes] = await Promise.all([
-        apiFetch<{ workspaces: Workspace[] }>(user, "/api/workspaces"),
+      const workspaceRes = await apiFetch<{
+        workspace: Workspace
+        relationshipProfile: WorkspaceRelationshipProfile | null
+      }>(user, `/api/workspaces/${encodeURIComponent(params.workspaceId)}`)
+
+      const ws = workspaceRes.workspace
+      if (!ws?.id) {
+        router.replace("/dashboard")
+        return
+      }
+
+      const [membersRes, projectsRes, reposRes, vercelRes, contractsRes, filesRes, paymentsRes, expensesRes, commsRes, linksRes] = await Promise.all([
         apiFetch<{ members: WorkspaceMember[] }>(
           user,
           `/api/workspaces/${params.workspaceId}/members`
@@ -1442,12 +1458,6 @@ export default function WorkspacePage() {
           `/api/workspaces/${params.workspaceId}/infrastructure-links`
         ).catch(() => ({ links: [] as InfrastructureLink[] })),
       ])
-
-      const ws = wsRes.workspaces.find((w) => w.id === params.workspaceId) ?? null
-      if (!ws) {
-        router.replace("/dashboard")
-        return
-      }
 
       setWorkspace(ws)
       setMembers(membersRes.members)

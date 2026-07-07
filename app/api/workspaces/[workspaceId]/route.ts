@@ -8,6 +8,7 @@ import {
   assertWorkspaceRole,
   resolveWorkspaceContext,
 } from "@/lib/workspace-auth"
+import { isClientAllowed, resolvePortalIdentity } from "@/lib/portal-auth"
 import { normalizeWorkspace, parseWorkspaceRole } from "@/lib/workspaces"
 import { applyWorkspacePurgePlan, buildWorkspacePurgePlan } from "@/lib/workspace-purge"
 
@@ -24,6 +25,10 @@ async function isAdmin(uid: string) {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null
+}
+
+function isClientFacingRole(role: ReturnType<typeof parseWorkspaceRole>) {
+  return role === "employee-of-client" || role === "beam-participant"
 }
 
 function serializeTimestamp(value: unknown): string | null {
@@ -195,14 +200,35 @@ export async function GET(
     const decodedToken = await getAdminAuth().verifyIdToken(idToken)
     const db = getAdminDb()
 
-    const { workspace } = await resolveWorkspaceContext(
+    const { workspace, role } = await resolveWorkspaceContext(
       db,
       params.workspaceId,
       decodedToken.uid,
       "beam-participant"
     )
 
-    return NextResponse.json({ success: true, workspace })
+    const clientId = readString(workspace.clientId)?.toLowerCase() ?? null
+    const identity = clientId ? await resolvePortalIdentity(request, clientId) : null
+
+    if (clientId && isClientFacingRole(role) && (!identity || !isClientAllowed(identity, clientId))) {
+      return NextResponse.json(
+        { error: "Workspace is not linked to your active client relationship." },
+        { status: 403 }
+      )
+    }
+
+    return NextResponse.json({
+      success: true,
+      workspace: { ...workspace, currentUserRole: role },
+      relationshipProfile:
+        identity && clientId && isClientAllowed(identity, clientId)
+          ? {
+              activeClientId: identity.activeClientId,
+              clientIds: identity.clientIds,
+              userRole: identity.userRole,
+            }
+          : null,
+    })
   } catch (error) {
     if (error instanceof WorkspaceAuthError) {
       return NextResponse.json({ error: error.message }, { status: error.status })
