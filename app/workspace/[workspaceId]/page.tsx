@@ -99,6 +99,8 @@ import type { ValuePaymentRecord } from "@/lib/value-profile"
 import type { ClientDeliverable } from "@/lib/deliverables"
 import type { WorkspaceUpdate } from "@/lib/workspace-updates"
 import { isUnread, normalizeWorkspaceUpdate, toYouTubeEmbed } from "@/lib/workspace-updates"
+import type { Answer, QuestionnaireDoc } from "@/lib/questionnaires"
+import { isCompleted, normalizeQuestionnaire } from "@/lib/questionnaires"
 import { cn } from "@/lib/utils"
 
 // ─── Local types ──────────────────────────────────────────────────────────────
@@ -1133,6 +1135,8 @@ export default function WorkspacePage() {
   const [selectedContract, setSelectedContract] = useState<BeamContract | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [files, setFiles] = useState<WorkspaceFile[]>([])
+  const [questionnaires, setQuestionnaires] = useState<QuestionnaireDoc[]>([])
+  const [questionnairesLoading, setQuestionnairesLoading] = useState(true)
   const [workspaceUpdates, setWorkspaceUpdates] = useState<WorkspaceUpdate[]>([])
   const [updatesLoading, setUpdatesLoading] = useState(true)
   const [statusVideos, setStatusVideos] = useState<ClientStatusVideo[]>([])
@@ -1153,6 +1157,7 @@ export default function WorkspacePage() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const pendingFileProjectIdRef = useRef<string | null>(null)
   const draftFileInputRef = useRef<HTMLInputElement>(null)
   const [paymentData, setPaymentData] = useState<WorkspacePaymentData | null>(null)
   const [expenses, setExpenses] = useState<WorkspaceExpense[]>([])
@@ -1258,6 +1263,17 @@ export default function WorkspacePage() {
     () => clientServiceLabels(clientRecord),
     [clientRecord]
   )
+  const activeQuestionnaire = useMemo(
+    () => questionnaires.find((questionnaire) => questionnaire.status === "active") ?? null,
+    [questionnaires]
+  )
+  const completedQuestionnaires = useMemo(
+    () =>
+      questionnaires.filter(
+        (questionnaire) => questionnaire.status === "closed" || isCompleted(questionnaire)
+      ),
+    [questionnaires]
+  )
 
   const filteredRepos = useMemo(() => {
     const q = repoQuery.toLowerCase()
@@ -1296,6 +1312,10 @@ export default function WorkspacePage() {
   const selectedProjectCard = useMemo(
     () => projectCards.find((project) => project.id === selectedProjectId) ?? projectCards[0] ?? null,
     [projectCards, selectedProjectId]
+  )
+  const generalFiles = useMemo(
+    () => files.filter((file) => !file.projectId),
+    [files]
   )
   const dominantType = useMemo((): AssetProjectType => {
     const counts: Record<string, number> = {}
@@ -1593,6 +1613,40 @@ export default function WorkspacePage() {
         console.warn("Unable to load workspace updates:", err)
         setWorkspaceUpdates([])
         setUpdatesLoading(false)
+      }
+    )
+
+    return () => unsubscribe()
+  }, [params.workspaceId, user])
+
+  useEffect(() => {
+    if (!user) {
+      setQuestionnaires([])
+      setQuestionnairesLoading(false)
+      return
+    }
+
+    setQuestionnairesLoading(true)
+    const unsubscribe = onSnapshot(
+      query(
+        collection(getDb(), "workspaces", params.workspaceId, "questionnaires"),
+        orderBy("createdAt", "desc"),
+        limit(5)
+      ),
+      (snapshot) => {
+        setQuestionnaires(
+          snapshot.docs
+            .map((docSnap) =>
+              normalizeQuestionnaire(docSnap.id, docSnap.data() as Record<string, unknown>)
+            )
+            .filter((questionnaire) => questionnaire.status === "active" || questionnaire.status === "closed")
+        )
+        setQuestionnairesLoading(false)
+      },
+      (err) => {
+        console.warn("Unable to load questionnaires:", err)
+        setQuestionnaires([])
+        setQuestionnairesLoading(false)
       }
     )
 
@@ -2612,7 +2666,7 @@ export default function WorkspacePage() {
 
   const uploadWorkspaceFile = async (
     file: File,
-    options: { category: "general" | "contract"; selectForDraft?: boolean }
+    options: { category: "general" | "contract"; selectForDraft?: boolean; projectId?: string | null }
   ) => {
     if (!user) return null
 
@@ -2666,6 +2720,7 @@ export default function WorkspacePage() {
             storagePath,
             downloadUrl,
             category: options.category,
+            projectId: options.projectId ?? null,
           }),
         }
       )
@@ -2694,10 +2749,17 @@ export default function WorkspacePage() {
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
+    const projectId = pendingFileProjectIdRef.current
+    pendingFileProjectIdRef.current = null
     // Reset input so the same file can be re-selected after an error
     if (fileInputRef.current) fileInputRef.current.value = ""
     if (!file) return
-    await uploadWorkspaceFile(file, { category: "general" })
+    await uploadWorkspaceFile(file, { category: "general", projectId })
+  }
+
+  const startWorkspaceFileUpload = (projectId: string | null = null) => {
+    pendingFileProjectIdRef.current = projectId
+    fileInputRef.current?.click()
   }
 
   const handleDraftFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2860,6 +2922,13 @@ export default function WorkspacePage() {
               </span>
             )}
           </TabsTrigger>
+          <TabsTrigger value="intake">
+            <FileText className="mr-2 h-4 w-4" />
+            Intake
+            {activeQuestionnaire && !isCompleted(activeQuestionnaire) ? (
+              <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-amber-400" />
+            ) : null}
+          </TabsTrigger>
           {!HIDDEN_WORKSPACE_TABS.has("deliverables") ? (
             <TabsTrigger value="deliverables">
               <CheckCircle className="mr-2 h-4 w-4" />
@@ -2890,20 +2959,18 @@ export default function WorkspacePage() {
             <Server className="mr-2 h-4 w-4" />
             Hosting
           </TabsTrigger>
-          <TabsTrigger value="files">
-            <UploadCloud className="mr-2 h-4 w-4" />
-            Files
-            {files.length > 0 && (
-              <span className="ml-1.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                {files.length}
-              </span>
-            )}
-          </TabsTrigger>
         </TabsList>
 
         {/* ── Child Projects ── */}
         <TabsContent value="projects">
           <div className="space-y-6">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={FILE_INPUT_ACCEPT}
+              className="sr-only"
+              onChange={handleFileChange}
+            />
             <Card>
               <CardHeader>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -3439,12 +3506,29 @@ export default function WorkspacePage() {
                             Suggest a change
                           </Button>
                         </div>
+
+                        <ProjectFilesPanel
+                          project={project}
+                          files={files.filter((file) => file.projectId === project.id)}
+                          uploading={uploading}
+                          uploadProgress={uploadProgress}
+                          onUpload={(projectId) => startWorkspaceFileUpload(projectId)}
+                          onDelete={(fileId) => void handleDeleteFile(fileId)}
+                        />
                       </CardContent>
                     </Card>
                   )
                 })
               )}
             </div>
+
+            <GeneralFilesPanel
+              files={generalFiles}
+              uploading={uploading}
+              uploadProgress={uploadProgress}
+              onUpload={() => startWorkspaceFileUpload(null)}
+              onDelete={(fileId) => void handleDeleteFile(fileId)}
+            />
 
             {selectedProjectCard ? (
               <Card>
@@ -4740,117 +4824,55 @@ export default function WorkspacePage() {
           </div>
         </TabsContent>
 
-        {/* ── Files ── */}
-        <TabsContent value="files">
+        {/* ── Intake ── */}
+        <TabsContent value="intake">
           <Card>
-            <CardHeader className="flex flex-row items-start justify-between gap-4">
-              <div>
-                <CardTitle>Uploaded Files</CardTitle>
-                <CardDescription>
-                  PDFs, Word docs, spreadsheets, and other documents shared in this workspace.
-                  Max 50 MB per file.
-                </CardDescription>
-              </div>
-              <div>
-                {/* Hidden file input — triggered by the button below */}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={FILE_INPUT_ACCEPT}
-                  className="sr-only"
-                  onChange={handleFileChange}
-                />
-                <Button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                >
-                  {uploading ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <UploadCloud className="mr-2 h-4 w-4" />
-                  )}
-                  {uploading ? "Uploading…" : "Upload File"}
-                </Button>
-              </div>
+            <CardHeader>
+              <CardTitle>Intake</CardTitle>
+              <CardDescription>
+                Project questionnaires and discovery forms sent by the Readyaimgo team.
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Upload progress bar */}
-              {uploadProgress !== null && (
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between text-xs text-slate-500">
-                    <span>Uploading…</span>
-                    <span>{uploadProgress}%</span>
-                  </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
-                    <div
-                      className="h-full rounded-full bg-primary transition-all duration-200"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
+              {questionnairesLoading ? (
+                <div className="h-28 animate-pulse rounded-2xl bg-muted/40" />
+              ) : !activeQuestionnaire && completedQuestionnaires.length === 0 ? (
+                <Card className="border-dashed">
+                  <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                    No intake form yet. Ezra will send one when it&apos;s time to gather
+                    information about your project.
+                  </CardContent>
+                </Card>
+              ) : null}
 
-              {/* Empty state */}
-              {files.length === 0 && uploadProgress === null && (
-                <div className="flex flex-col items-center justify-center rounded-2xl border border-border/60 bg-slate-50/60 px-6 py-14 text-center">
-                  <UploadCloud className="mb-3 h-8 w-8 text-slate-300" />
-                  <p className="text-sm font-semibold text-slate-600">No files yet.</p>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Upload a PDF, Word document, spreadsheet, or plain-text file to get started.
+              {activeQuestionnaire && user ? (
+                <IntakeQuestionnaire
+                  questionnaire={activeQuestionnaire}
+                  workspaceId={params.workspaceId}
+                  user={user}
+                />
+              ) : null}
+
+              {completedQuestionnaires.length > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Completed Forms
                   </p>
-                </div>
-              )}
-
-              {/* File list */}
-              {files.length > 0 && (
-                <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border">
-                  {files.map((file) => (
+                  {completedQuestionnaires.map((questionnaire) => (
                     <div
-                      key={file.id}
-                      className="flex items-center justify-between gap-4 bg-white/80 px-4 py-3 first:rounded-t-2xl last:rounded-b-2xl"
+                      key={questionnaire.id}
+                      className="flex items-center justify-between rounded-lg border px-4 py-2.5 text-sm"
                     >
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-slate-900">
-                          {file.name}
-                        </p>
-                        <p className="mt-0.5 text-xs text-slate-500">
-                          {formatFileSize(file.size)}
-                          {" · "}
-                          {new Date(file.createdAt).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            year: "numeric",
-                          })}
-                          {file.uploadedByEmail && (
-                            <>
-                              {" · "}
-                              <span className="text-slate-400">{file.uploadedByEmail}</span>
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <a
-                          href={file.downloadUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          title="Download"
-                          className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                        >
-                          <Download className="h-4 w-4" />
-                        </a>
-                        <button
-                          onClick={() => void handleDeleteFile(file.id)}
-                          title="Delete"
-                          className="rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
+                      <span className="font-medium">{questionnaire.title}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {questionnaire.completedAt
+                          ? new Date(questionnaire.completedAt).toLocaleDateString()
+                          : ""}
+                      </span>
                     </div>
                   ))}
                 </div>
-              )}
+              ) : null}
             </CardContent>
           </Card>
         </TabsContent>
@@ -5989,6 +6011,440 @@ export default function WorkspacePage() {
         </DialogContent>
       </Dialog>
     </AppShell>
+  )
+}
+
+function WorkspaceFileRows({
+  files,
+  onDelete,
+}: {
+  files: WorkspaceFile[]
+  onDelete: (fileId: string) => void
+}) {
+  if (files.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-border bg-white/70 px-4 py-6 text-center text-xs text-slate-500">
+        No files attached yet.
+      </div>
+    )
+  }
+
+  return (
+    <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border">
+      {files.map((file) => (
+        <div
+          key={file.id}
+          className="flex items-center justify-between gap-4 bg-white/80 px-4 py-3 first:rounded-t-2xl last:rounded-b-2xl"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold text-slate-900">{file.name}</p>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {formatFileSize(file.size)}
+              {" · "}
+              {new Date(file.createdAt).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              })}
+              {file.uploadedByEmail ? (
+                <>
+                  {" · "}
+                  <span className="text-slate-400">{file.uploadedByEmail}</span>
+                </>
+              ) : null}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <a
+              href={file.downloadUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="Download"
+              className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <Download className="h-4 w-4" />
+            </a>
+            <button
+              type="button"
+              onClick={() => onDelete(file.id)}
+              title="Delete"
+              className="rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function UploadProgressBar({ uploadProgress }: { uploadProgress: number | null }) {
+  if (uploadProgress === null) return null
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs text-slate-500">
+        <span>Uploading...</span>
+        <span>{uploadProgress}%</span>
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+        <div
+          className="h-full rounded-full bg-primary transition-all duration-200"
+          style={{ width: `${uploadProgress}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+function ProjectFilesPanel({
+  project,
+  files,
+  uploading,
+  uploadProgress,
+  onUpload,
+  onDelete,
+}: {
+  project: WorkspaceProject
+  files: WorkspaceFile[]
+  uploading: boolean
+  uploadProgress: number | null
+  onUpload: (projectId: string) => void
+  onDelete: (fileId: string) => void
+}) {
+  const [expanded, setExpanded] = useState(files.length > 0)
+
+  useEffect(() => {
+    if (files.length > 0) setExpanded(true)
+  }, [files.length])
+
+  return (
+    <div className="mt-4 rounded-2xl border border-border bg-slate-50/70 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setExpanded((current) => !current)}
+          className="min-w-0 text-left"
+        >
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+            Files
+          </p>
+          <p className="mt-1 truncate text-xs text-slate-500">
+            {files.length} file{files.length === 1 ? "" : "s"} attached to {projectTitle(project)}
+          </p>
+        </button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => onUpload(project.id)}
+          disabled={uploading}
+        >
+          {uploading ? (
+            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <UploadCloud className="mr-2 h-3.5 w-3.5" />
+          )}
+          Upload
+        </Button>
+      </div>
+
+      {expanded ? (
+        <div className="mt-3 space-y-3">
+          <UploadProgressBar uploadProgress={uploadProgress} />
+          <WorkspaceFileRows files={files} onDelete={onDelete} />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function GeneralFilesPanel({
+  files,
+  uploading,
+  uploadProgress,
+  onUpload,
+  onDelete,
+}: {
+  files: WorkspaceFile[]
+  uploading: boolean
+  uploadProgress: number | null
+  onUpload: () => void
+  onDelete: (fileId: string) => void
+}) {
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle className="text-base">General Files</CardTitle>
+          <CardDescription>
+            Workspace-level files that are not tied to a specific project.
+          </CardDescription>
+        </div>
+        <Button type="button" variant="outline" onClick={onUpload} disabled={uploading}>
+          {uploading ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <UploadCloud className="mr-2 h-4 w-4" />
+          )}
+          Upload File
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <UploadProgressBar uploadProgress={uploadProgress} />
+        <WorkspaceFileRows files={files} onDelete={onDelete} />
+      </CardContent>
+    </Card>
+  )
+}
+
+function IntakeQuestionnaire({
+  questionnaire,
+  workspaceId,
+  user,
+}: {
+  questionnaire: QuestionnaireDoc
+  workspaceId: string
+  user: { getIdToken: () => Promise<string> }
+}) {
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [answers, setAnswers] = useState<Record<string, string | string[] | number | null>>({})
+  const [submitting, setSubmitting] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const questions = useMemo(
+    () => [...questionnaire.questions].sort((a, b) => a.order - b.order),
+    [questionnaire.questions]
+  )
+  const currentQuestion = questions[currentIndex] ?? null
+  const isLast = currentIndex === questions.length - 1
+  const progress = questions.length ? Math.round((currentIndex / questions.length) * 100) : 0
+
+  function setAnswer(value: string | string[] | number | null) {
+    if (!currentQuestion) return
+    setAnswers((prev) => ({ ...prev, [currentQuestion.id]: value }))
+  }
+
+  function canAdvance(): boolean {
+    if (!currentQuestion || !currentQuestion.required) return true
+    const val = answers[currentQuestion.id]
+    if (val === null || val === undefined) return false
+    if (typeof val === "string") return val.trim().length > 0
+    if (Array.isArray(val)) return val.length > 0
+    return true
+  }
+
+  async function handleSubmit() {
+    const answerArray: Answer[] = questions.map((question) => ({
+      questionId: question.id,
+      questionText: question.text,
+      type: question.type,
+      value: answers[question.id] ?? null,
+    }))
+
+    setSubmitting(true)
+    setError(null)
+    try {
+      const token = await user.getIdToken()
+      const res = await fetch(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/questionnaires/${encodeURIComponent(questionnaire.id)}/submit`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ answers: answerArray }),
+        }
+      )
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}))
+        throw new Error(payload?.error || "Submission failed")
+      }
+      setSubmitted(true)
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Something went wrong. Please try again.")
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (submitted || isCompleted(questionnaire)) {
+    return (
+      <Card className="border-green-200 bg-green-50/40">
+        <CardContent className="space-y-2 py-10 text-center">
+          <CheckCircle className="mx-auto h-8 w-8 text-green-700" />
+          <p className="font-semibold text-green-800">
+            {questionnaire.clientLabel
+              ? `Thanks, ${questionnaire.clientLabel}!`
+              : "Thanks for completing the form!"}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Ezra has been notified and will follow up shortly.
+          </p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (!currentQuestion) {
+    return (
+      <Card className="border-dashed">
+        <CardContent className="py-8 text-center text-sm text-muted-foreground">
+          This intake form does not have questions yet.
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">{questionnaire.title}</CardTitle>
+        {questionnaire.description ? (
+          <CardDescription>{questionnaire.description}</CardDescription>
+        ) : null}
+        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-all duration-300"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Question {currentIndex + 1} of {questions.length}
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm font-medium leading-relaxed">
+          {currentQuestion.text}
+          {currentQuestion.required ? <span className="ml-1 text-red-500">*</span> : null}
+        </p>
+
+        {currentQuestion.type === "short" ? (
+          <Input
+            placeholder={currentQuestion.placeholder ?? "Your answer"}
+            value={(answers[currentQuestion.id] as string) ?? ""}
+            onChange={(event) => setAnswer(event.target.value)}
+          />
+        ) : null}
+        {currentQuestion.type === "long" ? (
+          <Textarea
+            placeholder={currentQuestion.placeholder ?? "Your answer"}
+            value={(answers[currentQuestion.id] as string) ?? ""}
+            onChange={(event) => setAnswer(event.target.value)}
+            rows={4}
+          />
+        ) : null}
+        {currentQuestion.type === "choice" && currentQuestion.options ? (
+          <div className="space-y-2">
+            {currentQuestion.options.map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setAnswer(option)}
+                className={cn(
+                  "w-full rounded-lg border px-4 py-2.5 text-left text-sm transition-colors",
+                  answers[currentQuestion.id] === option
+                    ? "border-primary bg-primary/5 font-medium"
+                    : "border-border hover:border-primary/50"
+                )}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {currentQuestion.type === "multi" && currentQuestion.options ? (
+          <div className="space-y-2">
+            {currentQuestion.options.map((option) => {
+              const selected = ((answers[currentQuestion.id] as string[]) ?? []).includes(option)
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => {
+                    const current = (answers[currentQuestion.id] as string[]) ?? []
+                    setAnswer(selected ? current.filter((value) => value !== option) : [...current, option])
+                  }}
+                  className={cn(
+                    "w-full rounded-lg border px-4 py-2.5 text-left text-sm transition-colors",
+                    selected
+                      ? "border-primary bg-primary/5 font-medium"
+                      : "border-border hover:border-primary/50"
+                  )}
+                >
+                  {option}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+        {currentQuestion.type === "scale" ? (
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              {Array.from(
+                { length: (currentQuestion.scaleMax ?? 10) - (currentQuestion.scaleMin ?? 1) + 1 },
+                (_, index) => (currentQuestion.scaleMin ?? 1) + index
+              ).map((number) => (
+                <button
+                  key={number}
+                  type="button"
+                  onClick={() => setAnswer(number)}
+                  className={cn(
+                    "h-10 w-10 rounded-lg border text-sm font-medium transition-colors",
+                    answers[currentQuestion.id] === number
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border hover:border-primary/50"
+                  )}
+                >
+                  {number}
+                </button>
+              ))}
+            </div>
+            {currentQuestion.scaleLabels ? (
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>{currentQuestion.scaleLabels.min}</span>
+                <span>{currentQuestion.scaleLabels.max}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {error ? <p className="text-xs text-red-500">{error}</p> : null}
+
+        <div className="flex items-center justify-between pt-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={currentIndex === 0}
+            onClick={() => setCurrentIndex((index) => Math.max(0, index - 1))}
+          >
+            Back
+          </Button>
+          {isLast ? (
+            <Button
+              type="button"
+              size="sm"
+              disabled={!canAdvance() || submitting}
+              onClick={() => void handleSubmit()}
+            >
+              {submitting ? "Submitting..." : "Submit"}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              disabled={!canAdvance()}
+              onClick={() => setCurrentIndex((index) => Math.min(questions.length - 1, index + 1))}
+            >
+              Next
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 

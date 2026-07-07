@@ -56,7 +56,7 @@ export async function GET(
 // The server validates membership, MIME type, size, and storage path prefix
 // before writing the Firestore doc. Requires workspace membership.
 //
-// Body: { name, contentType, size, storagePath, downloadUrl, category? }
+// Body: { name, contentType, size, storagePath, downloadUrl, category?, projectId? }
 
 export async function POST(
   request: NextRequest,
@@ -84,6 +84,10 @@ export async function POST(
       typeof body.downloadUrl === "string" ? body.downloadUrl.trim() : ""
     const category =
       body.category === "general" ? "general" : "contract"
+    const projectId =
+      typeof body.projectId === "string" && body.projectId.trim()
+        ? body.projectId.trim()
+        : null
 
     // ── Validation ────────────────────────────────────────────────────────────
 
@@ -126,6 +130,7 @@ export async function POST(
       workspaceId: params.workspaceId,
       uploadedByUid: decoded.uid,
       uploadedByEmail: (decoded.email ?? "").toLowerCase(),
+      projectId,
       name,
       contentType,
       size,

@@ -5,6 +5,7 @@ export type WorkspaceFileCategory = "contract" | "general"
 export interface WorkspaceFile {
   id: string
   workspaceId: string
+  projectId: string | null
   uploadedByUid: string
   uploadedByEmail: string
   name: string
@@ -63,6 +64,10 @@ export function normalizeWorkspaceFile(
   return {
     id,
     workspaceId: typeof data.workspaceId === "string" ? data.workspaceId : "",
+    projectId:
+      typeof data.projectId === "string" && data.projectId.trim()
+        ? data.projectId.trim()
+        : null,
     uploadedByUid: typeof data.uploadedByUid === "string" ? data.uploadedByUid : "",
     uploadedByEmail: typeof data.uploadedByEmail === "string" ? data.uploadedByEmail : "",
     name: typeof data.name === "string" ? data.name : "Unnamed file",
