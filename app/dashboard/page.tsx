@@ -130,7 +130,7 @@ function resolveWorkspaceDisplayName(workspace: Workspace) {
     domainFromEmail(workspace.registrationEmail) ||
     domainFromEmail(workspace.clientEmail) ||
     domainFromEmail(workspace.clientId)
-  return canonicalName || legacyName || emailDomain || "Untitled Workspace"
+  return canonicalName || legacyName || emailDomain || cleanString(workspace.id) || "Workspace"
 }
 
 function displayMemberName(member: {
@@ -320,7 +320,8 @@ function WorkspaceTitleEditor({
     if (!editing || !canEdit) return
 
     const timer = window.setTimeout(() => {
-      const nextTitle = cleanString(draft) || "Untitled Workspace"
+      const nextTitle = cleanString(draft)
+      if (!nextTitle) return
       if (nextTitle === lastSaved.current) return
 
       lastSaved.current = nextTitle
@@ -359,8 +360,12 @@ function WorkspaceTitleEditor({
       onClick={(event) => event.stopPropagation()}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => {
-        const fallbackTitle = cleanString(draft) || "Untitled Workspace"
+        const fallbackTitle = cleanString(draft) || title
         setDraft(fallbackTitle)
+        if (!cleanString(draft)) {
+          setEditing(false)
+          return
+        }
         onLocalTitleChange(workspace.id, fallbackTitle)
         if (fallbackTitle !== lastSaved.current) {
           lastSaved.current = fallbackTitle

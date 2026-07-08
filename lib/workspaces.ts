@@ -158,6 +158,8 @@ export interface WorkspaceMemberSummary {
 
 export interface Workspace {
   id: string
+  /** Canonical route/API/join key. This is the workspace document ID. */
+  slug: string
   name: string
   workspaceName: string | null
   businessName: string | null
@@ -428,6 +430,7 @@ function normalizeMeetingProviders(data: unknown): WorkspaceMeetingProvider[] {
 export function normalizeWorkspace(id: string, data: Record<string, unknown>): Workspace {
   return {
     id,
+    slug: id,
     name: typeof data.name === "string" ? data.name.trim() : "",
     workspaceName: typeof data.workspaceName === "string" ? data.workspaceName.trim() : null,
     businessName: typeof data.businessName === "string" ? data.businessName.trim() : null,

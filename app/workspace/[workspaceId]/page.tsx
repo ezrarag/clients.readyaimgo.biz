@@ -211,6 +211,7 @@ interface WorkspaceProject {
   title?: string
   clientId?: string
   workspaceId?: string | null
+  workspaceSlug?: string | null
   status?: string
   description?: string
   summary?: string

@@ -31,6 +31,64 @@ function isClientFacingRole(role: ReturnType<typeof parseWorkspaceRole>) {
   return role === "employee-of-client" || role === "beam-participant"
 }
 
+async function healWorkspaceChildClientIds(
+  db: ReturnType<typeof getAdminDb>,
+  workspaceId: string,
+  clientId: string
+) {
+  const collections = ["projects", "contracts"] as const
+  const now = FieldValue.serverTimestamp()
+  let healed = 0
+
+  for (const collectionName of collections) {
+    const snapshot = await db
+      .collection(collectionName)
+      .where("workspaceId", "==", workspaceId)
+      .get()
+
+    let batch = db.batch()
+    let batchWrites = 0
+
+    for (const docSnap of snapshot.docs) {
+      const data = docSnap.data() as Record<string, unknown>
+      const existingClientId = readString(data.clientId)
+      const existingWorkspaceSlug = readString(data.workspaceSlug)
+      if (existingClientId && existingWorkspaceSlug === workspaceId) continue
+
+      const update: Record<string, unknown> = {
+        workspaceSlug: workspaceId,
+        workspaceSlugHealedAt: now,
+        updatedAt: now,
+      }
+      if (!existingClientId) {
+        update.clientId = clientId
+        update.clientIdHealedFromWorkspaceId = workspaceId
+        update.clientIdHealedAt = now
+      }
+
+      batch.set(
+        docSnap.ref,
+        update,
+        { merge: true }
+      )
+      batchWrites += 1
+      healed += 1
+
+      if (batchWrites >= 450) {
+        await batch.commit()
+        batch = db.batch()
+        batchWrites = 0
+      }
+    }
+
+    if (batchWrites > 0) {
+      await batch.commit()
+    }
+  }
+
+  return healed
+}
+
 function serializeTimestamp(value: unknown): string | null {
   if (typeof value === "string" && value.trim()) return value.trim()
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString()
@@ -217,9 +275,14 @@ export async function GET(
       )
     }
 
+    const healedChildMappings = clientId
+      ? await healWorkspaceChildClientIds(db, params.workspaceId, clientId)
+      : 0
+
     return NextResponse.json({
       success: true,
       workspace: { ...workspace, currentUserRole: role },
+      healedChildMappings,
       relationshipProfile:
         identity && clientId && isClientAllowed(identity, clientId)
           ? {
@@ -282,7 +345,7 @@ export async function PATCH(
       update.workspaceName =
         typeof body.workspaceName === "string" && body.workspaceName.trim()
           ? body.workspaceName.trim()
-          : "Untitled Workspace"
+          : null
     }
 
     if ("githubOrg" in body) {
