@@ -14,12 +14,30 @@ service firebase.storage {
         );
     }
 
+    function isBeamAdmin() {
+      return signedIn() && (
+        (request.auth.uid == 'sQIordevJ7RLgzoUTjhEym39Lhd2') || (
+          firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+          'roles' in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+          firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.roles != null &&
+          'beam-admin' in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.roles
+        )
+      );
+    }
+
     // ── Workspace membership ──────────────────────────────────────────────────
     function isWorkspaceMember(workspaceId) {
-      return signedIn() &&
+      return signedIn() && (
+        isBeamAdmin() ||
         firestore.exists(
           /databases/(default)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)
-        );
+        ) || (
+          firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+          'workspaceIds' in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+          firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.workspaceIds != null &&
+          workspaceId in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.workspaceIds
+        )
+      );
     }
 
     function workspaceRole(workspaceId) {
@@ -29,8 +47,11 @@ service firebase.storage {
     }
 
     function isWorkspaceManager(workspaceId) {
-      return isWorkspaceMember(workspaceId) &&
-        workspaceRole(workspaceId) in ['owner', 'manager'];
+      return isBeamAdmin() || (
+        isWorkspaceMember(workspaceId) &&
+        firestore.exists(/databases/(default)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)) &&
+        workspaceRole(workspaceId) in ['owner', 'manager']
+      );
     }
 
     // Legacy org file storage (unchanged)
