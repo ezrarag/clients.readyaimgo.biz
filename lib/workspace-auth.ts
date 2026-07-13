@@ -5,6 +5,7 @@
  * Import only from API routes / Server Components — never from client components.
  */
 
+import { FieldValue } from "firebase-admin/firestore"
 import type { Firestore } from "firebase-admin/firestore"
 
 import { normalizeWorkspace } from "@/lib/workspaces"
@@ -81,12 +82,106 @@ export async function assertWorkspaceRole(
     .doc(uid)
     .get()
 
-  if (!memberSnap.exists) {
-    throw new WorkspaceAuthError("Not a member of this workspace.", 403)
+  let role: WorkspaceRole | null = null
+
+  if (memberSnap.exists) {
+    const data = memberSnap.data() as Record<string, unknown>
+    role = parseRole(data.role)
+  } else {
+    // ── Fallback discovery ──────────────────────────────────────────────────
+    // If the member record does not exist in the subcollection, check if the
+    // user is an administrator or has the workspace mapped in their user doc.
+    const userSnap = await db.collection("users").doc(uid).get().catch(() => null)
+    if (userSnap?.exists) {
+      const userData = userSnap.data() as Record<string, unknown>
+      const email = typeof userData.email === "string" ? userData.email : ""
+      const displayName =
+        typeof userData.displayName === "string"
+          ? userData.displayName
+          : typeof userData.full_name === "string"
+          ? userData.full_name
+          : ""
+      const roles = Array.isArray(userData.roles) ? userData.roles : []
+      const isAdmin =
+        (process.env.NEXT_PUBLIC_ADMIN_UID && uid === process.env.NEXT_PUBLIC_ADMIN_UID) ||
+        roles.includes("beam-admin")
+
+      const userWorkspaceIds = Array.isArray(userData.workspaceIds) ? userData.workspaceIds : []
+      const userClientIds = Array.isArray(userData.clientIds) ? userData.clientIds : []
+
+      // Check workspace clientId
+      const workspaceSnap = await db.collection("workspaces").doc(workspaceId).get().catch(() => null)
+      const workspaceData = workspaceSnap?.exists ? (workspaceSnap.data() as Record<string, unknown>) : null
+      const workspaceClientId = workspaceData ? (typeof workspaceData.clientId === "string" ? workspaceData.clientId : "") : ""
+
+      const isAuthorized =
+        isAdmin ||
+        userWorkspaceIds.includes(workspaceId) ||
+        (Boolean(workspaceClientId) && userClientIds.includes(workspaceClientId))
+
+      if (isAuthorized) {
+        let fallbackRole: WorkspaceRole = "collaborator"
+        if (isAdmin) {
+          fallbackRole = "owner"
+        } else if (
+          workspaceClientId &&
+          userData.memberships &&
+          typeof userData.memberships === "object" &&
+          !Array.isArray(userData.memberships)
+        ) {
+          const memberships = userData.memberships as Record<string, any>
+          const m = memberships[workspaceClientId]
+          if (m && typeof m === "object" && m.role) {
+            fallbackRole = parseRole(m.role)
+          }
+        }
+
+        // Self-heal: Write the missing member record back to workspaces
+        try {
+          await db
+            .collection("workspaces")
+            .doc(workspaceId)
+            .collection("members")
+            .doc(uid)
+            .set(
+              {
+                uid,
+                email: email || null,
+                displayName: displayName || null,
+                role: fallbackRole,
+                status: "active",
+                source: "portal-access-fallback-heal",
+                addedAt: FieldValue.serverTimestamp(),
+                updatedAt: FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            )
+
+          await db
+            .collection("workspaces")
+            .doc(workspaceId)
+            .set(
+              {
+                memberCount: FieldValue.increment(1),
+                updatedAt: FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            )
+        } catch (healError) {
+          console.error(
+            `Failed to self-heal member record for workspace ${workspaceId}, user ${uid}:`,
+            healError
+          )
+        }
+
+        role = fallbackRole
+      }
+    }
   }
 
-  const data = memberSnap.data() as Record<string, unknown>
-  const role = parseRole(data.role)
+  if (!role) {
+    throw new WorkspaceAuthError("Not a member of this workspace.", 403)
+  }
 
   if (!roleAtLeast(role, minRole)) {
     throw new WorkspaceAuthError(
