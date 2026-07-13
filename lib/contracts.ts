@@ -238,7 +238,7 @@ export function normalizeContract(id: string, data: Record<string, unknown>): Be
     createdAt: serializeTs(data.createdAt),
     updatedAt: serializeTs(data.updatedAt),
     createdBy: readString(data.createdBy),
-    documentUrl: typeof data.documentUrl === "string" ? data.documentUrl : null,
+    documentUrl: typeof data.documentUrl === "string" ? data.documentUrl : (typeof data.fileUrl === "string" ? data.fileUrl : (typeof data.attachmentUrl === "string" ? data.attachmentUrl : null)),
     beamNgos: Array.isArray(data.beamNgos)
       ? data.beamNgos.filter((n): n is string => typeof n === "string")
       : [],

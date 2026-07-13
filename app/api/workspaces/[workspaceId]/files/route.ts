@@ -126,6 +126,8 @@ export async function POST(
       .collection("files")
       .doc()
 
+
+
     await docRef.set({
       workspaceId: params.workspaceId,
       uploadedByUid: decoded.uid,
@@ -138,6 +140,15 @@ export async function POST(
       downloadUrl,
       category,
       createdAt: now,
+      
+      // Admin compatibility fields:
+      title: name,
+      filename: name,
+      mimeType: contentType,
+      url: downloadUrl,
+      scope: category === "contract" ? "contract" : "workspace",
+      authorKind: "client",
+      updatedAt: now,
     })
 
     const fileDoc = await docRef.get()

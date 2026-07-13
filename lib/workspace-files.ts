@@ -61,6 +61,11 @@ export function normalizeWorkspaceFile(
   id: string,
   data: Record<string, unknown>
 ): WorkspaceFile {
+  const name = typeof data.name === "string" ? data.name : (typeof data.title === "string" ? data.title : (typeof data.filename === "string" ? data.filename : "Unnamed file"))
+  const contentType = typeof data.contentType === "string" ? data.contentType : (typeof data.mimeType === "string" ? data.mimeType : "")
+  const downloadUrl = typeof data.downloadUrl === "string" ? data.downloadUrl : (typeof data.url === "string" ? data.url : "")
+  const category = data.category === "general" || data.scope === "workspace" || data.scope === "general" ? "general" : "contract"
+
   return {
     id,
     workspaceId: typeof data.workspaceId === "string" ? data.workspaceId : "",
@@ -70,12 +75,12 @@ export function normalizeWorkspaceFile(
         : null,
     uploadedByUid: typeof data.uploadedByUid === "string" ? data.uploadedByUid : "",
     uploadedByEmail: typeof data.uploadedByEmail === "string" ? data.uploadedByEmail : "",
-    name: typeof data.name === "string" ? data.name : "Unnamed file",
-    contentType: typeof data.contentType === "string" ? data.contentType : "",
+    name,
+    contentType,
     size: typeof data.size === "number" ? data.size : 0,
     storagePath: typeof data.storagePath === "string" ? data.storagePath : "",
-    downloadUrl: typeof data.downloadUrl === "string" ? data.downloadUrl : "",
-    category: data.category === "general" ? "general" : "contract",
+    downloadUrl,
+    category,
     createdAt: toIso(data.createdAt),
   }
 }
