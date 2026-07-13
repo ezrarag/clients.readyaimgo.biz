@@ -146,6 +146,130 @@ export async function POST(
       fileDoc.data() as Record<string, unknown>
     )
 
+    if (category === "contract") {
+      try {
+        const wsSnap = await db.collection("workspaces").doc(params.workspaceId).get()
+        const wsData = wsSnap.exists ? (wsSnap.data() as Record<string, unknown>) : {}
+        const wsClientId =
+          typeof wsData.clientId === "string" && wsData.clientId.trim()
+            ? wsData.clientId.trim()
+            : null
+        const wsClientEmail =
+          typeof wsData.clientEmail === "string" && wsData.clientEmail.trim()
+            ? wsData.clientEmail.trim()
+            : null
+
+        if (wsClientId) {
+          const userSnap = await db.collection("users").doc(decoded.uid).get()
+          const userData = userSnap.exists ? (userSnap.data() as Record<string, unknown>) : {}
+          const userEmail = typeof userData.email === "string" ? userData.email : (decoded.email ?? "")
+          const userDisplayName = typeof userData.displayName === "string" ? userData.displayName : (typeof userData.full_name === "string" ? userData.full_name : "Valued Client")
+          const userCompany = typeof userData.companyName === "string" ? userData.companyName : (typeof wsData.name === "string" ? wsData.name : (typeof wsData.workspaceName === "string" ? wsData.workspaceName : ""))
+
+          const nowIso = new Date().toISOString()
+          const issueDate = nowIso
+          const dueDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
+          
+          const year = new Date().getFullYear()
+          const month = String(new Date().getMonth() + 1).padStart(2, "0")
+          const day = String(new Date().getDate()).padStart(2, "0")
+          const time = String(Date.now()).slice(-6)
+          const invoiceNumber = `NEXUS-${year}-${month}${day}-${time}`
+          
+          const amountCents = 150000 // default $1,500.00
+          
+          // 1. Create the BeamContract record
+          const contractRef = db.collection("contracts").doc()
+          await contractRef.set({
+            clientId: wsClientId,
+            clientName: typeof wsData.name === "string" ? wsData.name : (typeof wsData.workspaceName === "string" ? wsData.workspaceName : wsClientId),
+            clientEmail: wsClientEmail || userEmail.toLowerCase(),
+            workspaceId: params.workspaceId,
+            contractType: "milestone",
+            status: "accepted",
+            title: name,
+            summary: `Uploaded contract document: ${name}`,
+            createdAt: now,
+            updatedAt: now,
+            createdBy: decoded.uid,
+            documentUrl: downloadUrl,
+          })
+
+          // 2. Create the ClientInvoice and ClientDeliverable records
+          const invoiceRef = db.collection("clients").doc(wsClientId).collection("invoices").doc()
+          const deliverableRef = db.collection("clients").doc(wsClientId).collection("deliverables").doc()
+
+          const invoicePayload = {
+            clientId: wsClientId,
+            workspaceId: params.workspaceId,
+            contractId: contractRef.id,
+            deliverableId: deliverableRef.id,
+            templateId: "nexus",
+            invoiceNumber,
+            title: `Milestone Invoice - ${name.replace(/\.[^/.]+$/, "")}`,
+            status: "client_review",
+            issueDate,
+            dueDate,
+            billingPeriod: `${month}/${day}/${year}`,
+            from: {
+              name: "ReadyAimGo",
+              company: "Ezra Haugabrooks, sole operator",
+              address: "Milwaukee, WI",
+              email: "support@readyaimgo.biz"
+            },
+            billTo: {
+              name: userDisplayName,
+              company: userCompany,
+              address: "",
+              email: userEmail
+            },
+            lineItems: [
+              {
+                description: `Execution and delivery under contract: ${name}`,
+                period: "",
+                quantity: 1,
+                rateCents: amountCents,
+                amountCents
+              }
+            ],
+            subtotalCents: amountCents,
+            taxLabel: "Sales tax",
+            taxCents: 0,
+            totalCents: amountCents,
+            paymentLink: null,
+            renderedHtml: null,
+            editableByClientFields: ["billTo.name", "billTo.company", "billTo.address", "billTo.email"],
+            acceptedAt: null,
+            paidAt: null,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          }
+
+          const deliverablePayload = {
+            clientId: wsClientId,
+            workspaceId: params.workspaceId,
+            projectId: null,
+            title: `Milestone Invoice - ${name.replace(/\.[^/.]+$/, "")}`,
+            summary: `Invoice ${invoiceNumber}`,
+            liveUrl: "",
+            screenshotUrls: [],
+            amount: amountCents,
+            status: "pending",
+            invoiceId: invoiceRef.id,
+            createdAt: nowIso,
+            updatedAt: nowIso
+          }
+
+          await Promise.all([
+            invoiceRef.set(invoicePayload),
+            deliverableRef.set(deliverablePayload)
+          ])
+        }
+      } catch (err) {
+        console.error("Failed to auto-generate contract invoice:", err)
+      }
+    }
+
     return NextResponse.json({ success: true, file }, { status: 201 })
   } catch (error) {
     if (error instanceof WorkspaceAuthError) {

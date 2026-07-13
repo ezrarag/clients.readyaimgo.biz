@@ -2747,6 +2747,7 @@ export default function WorkspacePage() {
           sourceDocumentIds: Array.from(new Set([...prev.sourceDocumentIds, newFile.id])),
         }))
       }
+      void load()
       setMessage("File uploaded successfully.")
       return newFile
     } catch (err) {
