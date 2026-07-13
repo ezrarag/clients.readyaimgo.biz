@@ -97,6 +97,8 @@ import {
 import type { CalendarEvent } from "@/lib/calendar-types"
 import type { ValuePaymentRecord } from "@/lib/value-profile"
 import type { ClientDeliverable } from "@/lib/deliverables"
+import type { ClientInvoice } from "@/lib/invoices"
+import { ContractMilestonePipeline } from "@/components/contracts/ContractMilestonePipeline"
 import type { WorkspaceUpdate } from "@/lib/workspace-updates"
 import { isUnread, normalizeWorkspaceUpdate, toYouTubeEmbed } from "@/lib/workspace-updates"
 import type { Answer, QuestionnaireDoc } from "@/lib/questionnaires"
@@ -113,6 +115,7 @@ interface WorkspacePaymentData {
   ledger: WorkspaceLedgerEntry[]
   payments: ValuePaymentRecord[]
   deliverables: ClientDeliverable[]
+  invoices: ClientInvoice[]
   accountOwner: {
     uid: string | null
     email: string | null
@@ -1444,6 +1447,7 @@ export default function WorkspacePage() {
           ledger: [] as WorkspaceLedgerEntry[],
           payments: [] as ValuePaymentRecord[],
           deliverables: [] as ClientDeliverable[],
+          invoices: [] as ClientInvoice[],
           accountOwner: null,
         })),
         apiFetch<{ expenses: WorkspaceExpense[] }>(
@@ -4559,6 +4563,10 @@ export default function WorkspacePage() {
                 prev?.id === id ? { ...prev, status } : prev
               )
             }}
+            invoices={paymentData?.invoices || []}
+            deliverables={paymentData?.deliverables || []}
+            onPayDeliverable={handleDeliverablePayment}
+            payingDeliverableId={payingDeliverableId}
           />
 
           <Dialog open={draftDialogOpen} onOpenChange={setDraftDialogOpen}>

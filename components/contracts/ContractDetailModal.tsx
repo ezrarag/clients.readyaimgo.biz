@@ -26,6 +26,9 @@ import type {
   LegalReview,
   FinancialReview,
 } from "@/lib/contracts"
+import { ContractMilestonePipeline } from "@/components/contracts/ContractMilestonePipeline"
+import type { ClientInvoice } from "@/lib/invoices"
+import type { ClientDeliverable } from "@/lib/deliverables"
 import { CONTRACT_STATUSES } from "@/lib/contracts"
 
 // ---------------------------------------------------------------------------
@@ -185,6 +188,10 @@ interface ContractDetailModalProps {
   onOpenChange: (open: boolean) => void
   onStatusUpdated?: (contractId: string, newStatus: ContractStatus) => void
   onContractUpdated?: (contract: BeamContract) => void
+  invoices?: ClientInvoice[]
+  deliverables?: ClientDeliverable[]
+  onPayDeliverable?: (deliverableId: string) => Promise<void>
+  payingDeliverableId?: string | null
 }
 
 export function ContractDetailModal({
@@ -194,6 +201,10 @@ export function ContractDetailModal({
   onOpenChange,
   onStatusUpdated,
   onContractUpdated,
+  invoices,
+  deliverables,
+  onPayDeliverable,
+  payingDeliverableId,
 }: ContractDetailModalProps) {
   const { user } = useAuth()
   const [statusLoading, setStatusLoading] = useState(false)
@@ -608,6 +619,19 @@ export function ContractDetailModal({
               </a>
             </Section>
           ) : null}
+
+          {/* Milestone Invoicing Pipeline */}
+          {contract.paymentDates && contract.paymentDates.length > 0 && invoices && (
+            <Section title="Milestones">
+              <ContractMilestonePipeline
+                contract={contract}
+                invoices={invoices}
+                deliverables={deliverables || []}
+                onPayDeliverable={onPayDeliverable || (async () => {})}
+                payingDeliverableId={payingDeliverableId || null}
+              />
+            </Section>
+          )}
 
           {/* Notes */}
           {contract.notes ? (

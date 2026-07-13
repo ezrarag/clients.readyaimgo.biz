@@ -11,6 +11,7 @@ import {
   normalizeValuePaymentRecord,
   normalizeValueProfile,
 } from "@/lib/value-profile"
+import { normalizeInvoice } from "@/lib/invoices"
 
 export const dynamic = "force-dynamic"
 
@@ -202,7 +203,7 @@ export async function GET(
 
     // Parallel fetches — each soft-fails independently so a missing subcollection
     // doesn't block the whole response.
-    const [profileSnap, paymentsSnap, deliverablesSnap] = await Promise.all([
+    const [profileSnap, paymentsSnap, deliverablesSnap, invoicesSnap] = await Promise.all([
       profileRef.get().catch(() => null),
       profileRef
         .collection(VALUE_PROFILE_PAYMENTS_COLLECTION)
@@ -216,6 +217,14 @@ export async function GET(
         .collection("clients")
         .doc(clientId)
         .collection("deliverables")
+        .get()
+        .catch(() => null),
+      // Fetch invoices for this workspace
+      db
+        .collection("clients")
+        .doc(clientId)
+        .collection("invoices")
+        .where("workspaceId", "==", params.workspaceId)
         .get()
         .catch(() => null),
     ])
@@ -239,6 +248,10 @@ export async function GET(
       )
       .filter((d) => d.status === "pending")
 
+    const invoices = (invoicesSnap?.docs ?? []).map((d) =>
+      normalizeInvoice(d.id, d.data() as Record<string, unknown>)
+    )
+
     return NextResponse.json({
       clientId,
       stripeCustomerId: profile.stripeCustomerId ?? null,
@@ -247,6 +260,7 @@ export async function GET(
       ledger,
       payments,
       deliverables,
+      invoices,
       accountOwner,
     })
   } catch (error) {
