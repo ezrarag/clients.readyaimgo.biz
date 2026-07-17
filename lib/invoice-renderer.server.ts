@@ -154,10 +154,19 @@ export async function renderInvoiceHtml(invoice: ClientInvoice) {
 
   let html = await readFile(invoiceTemplatePath(template.fileName), "utf8")
   html = html.replaceAll(template.seedInvoiceNumber, invoice.invoiceNumber)
-  html = replaceSection(html, "<!-- meta row -->", "<!-- from / bill to -->", buildMetaBlock(invoice))
-  html = replaceSection(html, "<!-- from / bill to -->", "<!-- line items -->", buildPartyBlock(invoice))
-  html = replaceSection(html, "<!-- line items -->", "<!-- totals -->", buildLineItemsBlock(invoice))
-  html = replaceSection(html, "<!-- totals -->", "<!-- payment -->", buildTotalsBlock(invoice))
-  html = replaceSection(html, "<!-- payment -->", "<!-- footer -->", buildPaymentBlock(invoice))
+
+  // JSON-escape the block replacements to avoid syntax errors inside the JSON template script tag
+  const metaBlock = JSON.stringify(buildMetaBlock(invoice)).slice(1, -1)
+  const partyBlock = JSON.stringify(buildPartyBlock(invoice)).slice(1, -1)
+  const lineItemsBlock = JSON.stringify(buildLineItemsBlock(invoice)).slice(1, -1)
+  const totalsBlock = JSON.stringify(buildTotalsBlock(invoice)).slice(1, -1)
+  const paymentBlock = JSON.stringify(buildPaymentBlock(invoice)).slice(1, -1)
+
+  html = replaceSection(html, "<!-- meta row -->", "<!-- from / bill to -->", metaBlock)
+  html = replaceSection(html, "<!-- from / bill to -->", "<!-- line items -->", partyBlock)
+  html = replaceSection(html, "<!-- line items -->", "<!-- totals -->", lineItemsBlock)
+  html = replaceSection(html, "<!-- totals -->", "<!-- payment -->", totalsBlock)
+  html = replaceSection(html, "<!-- payment -->", "<!-- footer -->", paymentBlock)
   return html
 }
+
