@@ -41,6 +41,7 @@ import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -1111,6 +1112,27 @@ function statusTone(status?: string) {
   return "bg-slate-100 text-slate-600"
 }
 
+interface SafeIframeProps extends React.IframeHTMLAttributes<HTMLIFrameElement> {
+  html: string
+}
+
+function SafeIframe({ html, ...props }: SafeIframeProps) {
+  const ref = useRef<HTMLIFrameElement>(null)
+
+  useEffect(() => {
+    if (ref.current) {
+      const doc = ref.current.contentWindow?.document
+      if (doc) {
+        doc.open()
+        doc.write(html)
+        doc.close()
+      }
+    }
+  }, [html])
+
+  return <iframe ref={ref} {...props} />
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function WorkspacePage() {
@@ -1144,6 +1166,10 @@ export default function WorkspacePage() {
   const [contracts, setContracts] = useState<BeamContract[]>([])
   const [selectedContract, setSelectedContract] = useState<BeamContract | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [selectedInvoiceForReview, setSelectedInvoiceForReview] = useState<ClientInvoice | null>(null)
+  const [invoiceReviewOpen, setInvoiceReviewOpen] = useState(false)
+  const [savingInvoiceReview, setSavingInvoiceReview] = useState(false)
+  const [invoiceReviewError, setInvoiceReviewError] = useState<string | null>(null)
   const [files, setFiles] = useState<WorkspaceFile[]>([])
   const [questionnaires, setQuestionnaires] = useState<QuestionnaireDoc[]>([])
   const [questionnairesLoading, setQuestionnairesLoading] = useState(true)
@@ -2172,6 +2198,97 @@ export default function WorkspacePage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to open billing portal.")
       setProcessingPayment(false)
+    }
+  }
+
+  const handleSaveBillingInfo = async () => {
+    if (!user || !selectedInvoiceForReview) return
+    setSavingInvoiceReview(true)
+    setInvoiceReviewError(null)
+    try {
+      const res = await apiFetch<{ success: boolean; data: ClientInvoice }>(
+        user,
+        `/api/workspaces/${encodeURIComponent(params.workspaceId)}/payments/invoices/${encodeURIComponent(selectedInvoiceForReview.id)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            billTo: selectedInvoiceForReview.billTo,
+          }),
+        }
+      )
+      setSelectedInvoiceForReview(res.data)
+      setPaymentData((prev) => {
+        if (!prev) return null
+        const nextInvoices = prev.invoices.map((inv) =>
+          inv.id === res.data.id ? res.data : inv
+        )
+        return { ...prev, invoices: nextInvoices }
+      })
+    } catch (err) {
+      setInvoiceReviewError(err instanceof Error ? err.message : "Unable to save billing details.")
+    } finally {
+      setSavingInvoiceReview(false)
+    }
+  }
+
+  const handleAcceptAndPay = async () => {
+    if (!user || !selectedInvoiceForReview) return
+    setSavingInvoiceReview(true)
+    setInvoiceReviewError(null)
+    try {
+      const res = await apiFetch<{ success: boolean; data: ClientInvoice }>(
+        user,
+        `/api/workspaces/${encodeURIComponent(params.workspaceId)}/payments/invoices/${encodeURIComponent(selectedInvoiceForReview.id)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            billTo: selectedInvoiceForReview.billTo,
+            status: "accepted",
+          }),
+        }
+      )
+      setSelectedInvoiceForReview(res.data)
+      setPaymentData((prev) => {
+        if (!prev) return null
+        const nextInvoices = prev.invoices.map((inv) =>
+          inv.id === res.data.id ? res.data : inv
+        )
+        return { ...prev, invoices: nextInvoices }
+      })
+      if (res.data.paymentLink) {
+        window.location.href = res.data.paymentLink
+      } else {
+        throw new Error("Stripe checkout link was not generated.")
+      }
+    } catch (err) {
+      setInvoiceReviewError(err instanceof Error ? err.message : "Unable to accept and pay invoice.")
+      setSavingInvoiceReview(false)
+    }
+  }
+
+  const handleUpdateAllocation = async (invoiceId: string, allocation: any) => {
+    if (!user) return
+    setError(null)
+    try {
+      const res = await apiFetch<{ success: boolean; data: ClientInvoice }>(
+        user,
+        `/api/workspaces/${encodeURIComponent(params.workspaceId)}/payments/invoices/${encodeURIComponent(invoiceId)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            allocation,
+          }),
+        }
+      )
+      setPaymentData((prev) => {
+        if (!prev) return null
+        const nextInvoices = prev.invoices.map((inv) =>
+          inv.id === res.data.id ? res.data : inv
+        )
+        return { ...prev, invoices: nextInvoices }
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to submit allocation feedback.")
     }
   }
 
@@ -4754,6 +4871,124 @@ export default function WorkspacePage() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+
+          {/* ── Client Invoice Review & Approval Modal ── */}
+          <Dialog open={invoiceReviewOpen} onOpenChange={(open) => !open && setInvoiceReviewOpen(false)}>
+            <DialogContent className="max-w-5xl">
+              <DialogHeader>
+                <DialogTitle>{selectedInvoiceForReview?.title || "Review Invoice"}</DialogTitle>
+                <DialogDescription>
+                  Review the invoice details, update your billing name or address if necessary, and approve.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr] mt-3">
+                {/* 1. Preview Side */}
+                <div className="rounded-2xl border border-border overflow-hidden h-[60vh] bg-slate-50">
+                  {selectedInvoiceForReview?.pdfUrl ? (
+                    <iframe
+                      title="Invoice PDF"
+                      src={selectedInvoiceForReview.pdfUrl}
+                      className="w-full h-full border-0"
+                    />
+                  ) : selectedInvoiceForReview?.renderedHtml ? (
+                    <SafeIframe
+                      title="Invoice Preview"
+                      html={selectedInvoiceForReview.renderedHtml}
+                      className="w-full h-full border-0"
+                    />
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                      No preview available.
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. Controls / Form Side */}
+                <div className="flex flex-col justify-between space-y-4">
+                  <div className="space-y-4">
+                    <p className="font-semibold text-sm text-slate-800">Billing Information</p>
+                    <div className="space-y-3">
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-slate-500">Bill To Name</label>
+                        <Input
+                          value={selectedInvoiceForReview?.billTo?.name || ""}
+                          onChange={(e) =>
+                            setSelectedInvoiceForReview((prev) =>
+                              prev ? { ...prev, billTo: { ...prev.billTo, name: e.target.value } } : null
+                            )
+                          }
+                          placeholder="Contact name"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-slate-500">Company Name</label>
+                        <Input
+                          value={selectedInvoiceForReview?.billTo?.company || ""}
+                          onChange={(e) =>
+                            setSelectedInvoiceForReview((prev) =>
+                              prev ? { ...prev, billTo: { ...prev.billTo, company: e.target.value } } : null
+                            )
+                          }
+                          placeholder="Company name"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-slate-500">Email Address</label>
+                        <Input
+                          value={selectedInvoiceForReview?.billTo?.email || ""}
+                          onChange={(e) =>
+                            setSelectedInvoiceForReview((prev) =>
+                              prev ? { ...prev, billTo: { ...prev.billTo, email: e.target.value } } : null
+                            )
+                          }
+                          placeholder="Billing email"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-slate-500">Billing Address</label>
+                        <Input
+                          value={selectedInvoiceForReview?.billTo?.address || ""}
+                          onChange={(e) =>
+                            setSelectedInvoiceForReview((prev) =>
+                              prev ? { ...prev, billTo: { ...prev.billTo, address: e.target.value } } : null
+                            )
+                          }
+                          placeholder="Street, City, State, ZIP"
+                        />
+                      </div>
+                    </div>
+
+                    {invoiceReviewError ? (
+                      <p className="text-xs font-medium text-rose-500">{invoiceReviewError}</p>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-2 border-t pt-4">
+                    <Button
+                      className="w-full"
+                      variant="outline"
+                      disabled={savingInvoiceReview}
+                      onClick={() => void handleSaveBillingInfo()}
+                    >
+                      {savingInvoiceReview ? "Saving..." : "Save Billing Info"}
+                    </Button>
+                    <Button
+                      className="w-full bg-emerald-600 text-white hover:bg-emerald-700"
+                      disabled={savingInvoiceReview}
+                      onClick={() => void handleAcceptAndPay()}
+                    >
+                      {savingInvoiceReview ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        "Accept & Pay"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         {/* ── Build Updates ── */}
@@ -5430,6 +5665,179 @@ export default function WorkspacePage() {
                     </Button>
                   </CardHeader>
                 </Card>
+
+                {/* ── Retainer Allocation Notification Section ── */}
+                {paymentData.invoices && paymentData.invoices.some(inv => inv.status === "paid" && inv.allocation && inv.allocation.clientFeedbackStatus !== "approved") && (
+                  <Card className="border border-amber-500/25 bg-amber-500/5 shadow-sm">
+                    <CardHeader>
+                      <CardTitle className="text-amber-900 text-lg flex items-center gap-2">
+                        <Sparkles className="h-5 w-5 text-amber-600 animate-pulse animate-duration-1000" />
+                        Retainer & Subscription Allocations
+                      </CardTitle>
+                      <CardDescription className="text-amber-850/80">
+                        The administration has directed your paid retainer fees towards subscription accounts. Please review the allocations and confirm or submit notes.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {paymentData.invoices
+                        .filter(inv => inv.status === "paid" && inv.allocation && inv.allocation.clientFeedbackStatus !== "approved")
+                        .map(invoice => {
+                          const allocation = invoice.allocation!
+                          return (
+                            <div key={invoice.id} className="bg-white p-4 rounded-xl border border-amber-500/20 shadow-sm space-y-3">
+                              <div className="flex justify-between items-start flex-wrap gap-2">
+                                <div>
+                                  <p className="font-semibold text-slate-800 text-sm">
+                                    Allocation for Invoice {invoice.invoiceNumber}
+                                  </p>
+                                  <p className="text-xs text-slate-500 mt-0.5">
+                                    Paid Amount: {currencyFormatter.format(invoice.totalCents / 100)}
+                                  </p>
+                                </div>
+                                <Badge variant="outline" className="border-amber-500/30 text-amber-700 bg-amber-500/10 uppercase font-semibold text-[10px]">
+                                  {allocation.directedTo} Subscription
+                                </Badge>
+                              </div>
+                              <p className="text-xs text-slate-600">
+                                This payment is allocated to support your <span className="font-semibold uppercase text-amber-700">{allocation.directedTo}</span> services. You can add notes or suggestions if you prefer these funds to be directed elsewhere, or confirm the allocation.
+                              </p>
+                              
+                              <div className="space-y-2 pt-1">
+                                <label className="text-xs font-medium text-slate-500 block">Notes or Suggestions (Optional):</label>
+                                <textarea
+                                  placeholder="e.g. Please allocate $20 towards Cohort subscription instead..."
+                                  className="w-full text-xs rounded-md border border-slate-200 bg-white p-2.5 outline-none focus:border-amber-500"
+                                  rows={2}
+                                  id={`client-feedback-note-${invoice.id}`}
+                                />
+                                <div className="flex justify-end gap-2 pt-1">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="border-slate-200 hover:bg-slate-50 text-xs px-3 h-8"
+                                    onClick={async () => {
+                                      const textEl = document.getElementById(`client-feedback-note-${invoice.id}`) as HTMLTextAreaElement
+                                      const note = textEl?.value || ""
+                                      await handleUpdateAllocation(invoice.id, {
+                                        ...allocation,
+                                        clientNote: note,
+                                        clientFeedbackStatus: "reviewed",
+                                      })
+                                    }}
+                                  >
+                                    Submit Suggestions
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    className="bg-amber-600 hover:bg-amber-700 text-white text-xs px-3 h-8"
+                                    onClick={async () => {
+                                      const textEl = document.getElementById(`client-feedback-note-${invoice.id}`) as HTMLTextAreaElement
+                                      const note = textEl?.value || ""
+                                      await handleUpdateAllocation(invoice.id, {
+                                        ...allocation,
+                                        clientNote: note || null,
+                                        clientFeedbackStatus: "approved",
+                                      })
+                                    }}
+                                  >
+                                    Agree & Confirm
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* ── Invoices Section ── */}
+                {paymentData.invoices && paymentData.invoices.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center justify-between gap-3 text-lg">
+                        <span>Pending & Historical Invoices</span>
+                        <Badge variant="secondary" className="bg-violet-100 text-violet-700 hover:bg-violet-100">{paymentData.invoices.length}</Badge>
+                      </CardTitle>
+                      <CardDescription>
+                        Review, update billing details, and pay milestones or monthly retainers.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        {paymentData.invoices.map((invoice) => (
+                          <Card key={invoice.id} className="border border-border/80 bg-white/50 shadow-sm transition hover:shadow">
+                            <CardHeader className="pb-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <CardTitle className="text-base">{invoice.title}</CardTitle>
+                                  <p className="text-xs text-slate-400 mt-0.5">
+                                    {invoice.invoiceNumber} · due {invoice.dueDate}
+                                  </p>
+                                </div>
+                                <Badge
+                                  className={[
+                                    "text-[10px] font-semibold uppercase",
+                                    invoice.status === "paid"
+                                      ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100"
+                                      : invoice.status === "accepted"
+                                        ? "bg-blue-100 text-blue-700 hover:bg-blue-100"
+                                        : "bg-amber-100 text-amber-700 hover:bg-amber-100",
+                                  ].join(" ")}
+                                >
+                                  {invoice.status}
+                                </Badge>
+                              </div>
+                            </CardHeader>
+                            <CardContent className="pb-3 text-sm">
+                              <div className="flex justify-between items-center text-slate-600">
+                                <span>Total Amount:</span>
+                                <span className="font-semibold text-slate-900">
+                                  {currencyFormatter.format(invoice.totalCents / 100)}
+                                </span>
+                              </div>
+                            </CardContent>
+                            <CardFooter className="flex justify-end gap-2 pt-0 pb-3 pr-3">
+                              {(invoice.status === "client_review" || invoice.status === "draft") && (
+                                <Button
+                                  size="sm"
+                                  onClick={() => {
+                                    setSelectedInvoiceForReview(invoice)
+                                    setInvoiceReviewOpen(true)
+                                  }}
+                                >
+                                  Review & Approve
+                                </Button>
+                              )}
+                              {invoice.status === "accepted" && invoice.paymentLink && (
+                                <Button
+                                  size="sm"
+                                  className="bg-emerald-600 text-white hover:bg-emerald-700"
+                                  asChild
+                                >
+                                  <a href={invoice.paymentLink} target="_blank" rel="noopener noreferrer">
+                                    Pay Invoice
+                                  </a>
+                                </Button>
+                              )}
+                              {invoice.pdfUrl && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  asChild
+                                >
+                                  <a href={invoice.pdfUrl} target="_blank" rel="noopener noreferrer">
+                                    View PDF
+                                  </a>
+                                </Button>
+                              )}
+                            </CardFooter>
+                          </Card>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
 
                 {paymentData.ledger.length === 0 && paymentData.payments.length === 0 ? (
                   <Card>

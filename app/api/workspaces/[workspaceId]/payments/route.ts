@@ -219,12 +219,11 @@ export async function GET(
         .collection("deliverables")
         .get()
         .catch(() => null),
-      // Fetch invoices for this workspace
+      // Fetch invoices for the client
       db
         .collection("clients")
         .doc(clientId)
         .collection("invoices")
-        .where("workspaceId", "==", params.workspaceId)
         .get()
         .catch(() => null),
     ])
@@ -248,9 +247,9 @@ export async function GET(
       )
       .filter((d) => d.status === "pending")
 
-    const invoices = (invoicesSnap?.docs ?? []).map((d) =>
-      normalizeInvoice(d.id, d.data() as Record<string, unknown>)
-    )
+    const invoices = (invoicesSnap?.docs ?? [])
+      .map((d) => normalizeInvoice(d.id, d.data() as Record<string, unknown>))
+      .filter((inv) => !inv.workspaceId || inv.workspaceId === params.workspaceId)
 
     return NextResponse.json({
       clientId,

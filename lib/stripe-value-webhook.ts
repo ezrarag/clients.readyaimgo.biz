@@ -280,17 +280,35 @@ async function handleDeliverableCheckoutCompleted(session: Stripe.Checkout.Sessi
   }
 
   if (!result.duplicate) {
-    await db.collection("transactions").add({
-      clientId,
-      type: "payment",
-      amount,
-      timestamp: FieldValue.serverTimestamp(),
-      description: `Deliverable payment - ${result.title}`,
-      stripeCheckoutSessionId: session.id,
-      stripePaymentIntentId: paymentIntentId ?? null,
-      deliverableId,
-      // Propagate workspaceId so the workspace payments tab can surface this.
-      ...(workspaceId ? { workspaceId } : {}),
+    const transactionRef = db.collection("transactions").doc()
+    await db.runTransaction(async (t) => {
+      t.set(transactionRef, {
+        clientId,
+        type: "payment",
+        amount,
+        timestamp: FieldValue.serverTimestamp(),
+        description: `Deliverable payment - ${result.title}`,
+        stripeCheckoutSessionId: session.id,
+        stripePaymentIntentId: paymentIntentId ?? null,
+        deliverableId,
+        ...(workspaceId ? { workspaceId } : {}),
+      })
+
+      const invoiceId = session.metadata?.invoiceId?.trim()
+      if (invoiceId) {
+        const invoiceRef = db.collection("clients").doc(clientId).collection("invoices").doc(invoiceId)
+        t.set(
+          invoiceRef,
+          {
+            status: "paid",
+            paidAt: FieldValue.serverTimestamp(),
+            stripeCheckoutSessionId: session.id,
+            paymentLink: session.url ?? null,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        )
+      }
     })
   }
 }

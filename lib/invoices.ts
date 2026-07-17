@@ -42,6 +42,7 @@ export interface ClientInvoice {
   taxCents?: number
   totalCents: number
   paymentLink?: string | null
+  pdfUrl?: string | null
   renderedHtml?: string | null
   editableByClientFields?: string[]
   acceptedAt?: string | null
@@ -49,7 +50,17 @@ export interface ClientInvoice {
   createdAt?: string | null
   updatedAt?: string | null
   installmentIndex?: number | null
+  allocation?: InvoiceAllocation | null
 }
+
+export interface InvoiceAllocation {
+  directedTo: "nexus" | "space" | "motion" | "cohort" | "as_invoiced"
+  amountCents: number
+  allocatedAt: string
+  clientNote?: string | null
+  clientFeedbackStatus: "pending" | "reviewed" | "approved"
+}
+
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value : ""
@@ -111,6 +122,7 @@ export function normalizeInvoice(id: string, data: Record<string, unknown>): Cli
     taxCents,
     totalCents: readNumber(data.totalCents) ?? subtotalCents + taxCents,
     paymentLink: typeof data.paymentLink === "string" ? data.paymentLink : null,
+    pdfUrl: typeof data.pdfUrl === "string" ? data.pdfUrl : null,
     renderedHtml: typeof data.renderedHtml === "string" ? data.renderedHtml : null,
     editableByClientFields: Array.isArray(data.editableByClientFields)
       ? data.editableByClientFields.filter((entry): entry is string => typeof entry === "string")
@@ -120,5 +132,13 @@ export function normalizeInvoice(id: string, data: Record<string, unknown>): Cli
     createdAt: typeof data.createdAt === "string" ? data.createdAt : null,
     updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : null,
     installmentIndex: typeof data.installmentIndex === "number" ? data.installmentIndex : null,
+    allocation: data.allocation && typeof data.allocation === "object" ? {
+      directedTo: (data.allocation as any).directedTo || "as_invoiced",
+      amountCents: typeof (data.allocation as any).amountCents === "number" ? (data.allocation as any).amountCents : 0,
+      allocatedAt: (data.allocation as any).allocatedAt || new Date().toISOString(),
+      clientNote: (data.allocation as any).clientNote || null,
+      clientFeedbackStatus: (data.allocation as any).clientFeedbackStatus || "pending",
+    } : null,
   }
 }
+

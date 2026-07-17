@@ -30,18 +30,50 @@ export async function GET(
 
     await assertWorkspaceRole(db, params.workspaceId, decoded.uid, "beam-participant")
 
-    const snap = await db
-      .collection("workspaces")
-      .doc(params.workspaceId)
-      .collection("files")
-      .orderBy("createdAt", "desc")
-      .get()
+    const [snap, contractsSnap] = await Promise.all([
+      db
+        .collection("workspaces")
+        .doc(params.workspaceId)
+        .collection("files")
+        .orderBy("createdAt", "desc")
+        .get(),
+      db
+        .collection("contracts")
+        .where("workspaceId", "==", params.workspaceId)
+        .get()
+        .catch(() => null)
+    ])
 
     const files = snap.docs.map((d) =>
       normalizeWorkspaceFile(d.id, d.data() as Record<string, unknown>)
     )
 
-    return NextResponse.json({ success: true, files })
+    const fileUrls = new Set(files.map((f) => f.downloadUrl).filter(Boolean))
+
+    const contractFiles = (contractsSnap?.docs ?? []).map((doc) => {
+      const data = doc.data()
+      const url = data.documentUrl || data.fileUrl || data.attachmentUrl || ""
+      return {
+        id: `contract-ref:${doc.id}`,
+        name: data.title || "Contract document",
+        contentType: "application/pdf",
+        size: 0,
+        storagePath: data.storagePath || "",
+        downloadUrl: url,
+        category: "contract" as const,
+        projectId: null,
+        createdAt: data.createdAt || new Date().toISOString(),
+        updatedAt: data.updatedAt || new Date().toISOString(),
+      }
+    }).filter((f) => f.downloadUrl && !fileUrls.has(f.downloadUrl))
+
+    const mergedFiles = [...files, ...contractFiles].sort((left, right) => {
+      const leftTime = new Date(left.createdAt || 0).getTime()
+      const rightTime = new Date(right.createdAt || 0).getTime()
+      return rightTime - leftTime
+    })
+
+    return NextResponse.json({ success: true, files: mergedFiles })
   } catch (error) {
     if (error instanceof WorkspaceAuthError) {
       return NextResponse.json({ error: error.message }, { status: error.status })
@@ -164,19 +196,41 @@ export async function POST(
         const wsClientId =
           typeof wsData.clientId === "string" && wsData.clientId.trim()
             ? wsData.clientId.trim()
-            : null
+            : ""
         const wsClientEmail =
           typeof wsData.clientEmail === "string" && wsData.clientEmail.trim()
             ? wsData.clientEmail.trim()
-            : null
+            : ""
 
-        if (wsClientId) {
-          const userSnap = await db.collection("users").doc(decoded.uid).get()
-          const userData = userSnap.exists ? (userSnap.data() as Record<string, unknown>) : {}
-          const userEmail = typeof userData.email === "string" ? userData.email : (decoded.email ?? "")
-          const userDisplayName = typeof userData.displayName === "string" ? userData.displayName : (typeof userData.full_name === "string" ? userData.full_name : "Valued Client")
-          const userCompany = typeof userData.companyName === "string" ? userData.companyName : (typeof wsData.name === "string" ? wsData.name : (typeof wsData.workspaceName === "string" ? wsData.workspaceName : ""))
+        const userSnap = await db.collection("users").doc(decoded.uid).get()
+        const userData = userSnap.exists ? (userSnap.data() as Record<string, unknown>) : {}
+        const userEmail = typeof userData.email === "string" ? userData.email : (decoded.email ?? "")
+        const userDisplayName = typeof userData.displayName === "string" ? userData.displayName : (typeof userData.full_name === "string" ? userData.full_name : "Valued Client")
+        const userCompany = typeof userData.companyName === "string" ? userData.companyName : (typeof wsData.name === "string" ? wsData.name : (typeof wsData.workspaceName === "string" ? wsData.workspaceName : ""))
 
+        const finalClientId = wsClientId
+        const finalClientName = typeof wsData.name === "string" ? wsData.name : (typeof wsData.workspaceName === "string" ? wsData.workspaceName : finalClientId || "Pending Client")
+        const finalClientEmail = wsClientEmail || userEmail.toLowerCase()
+
+        // 1. Always create the BeamContract record
+        const contractRef = db.collection("contracts").doc()
+        await contractRef.set({
+          clientId: finalClientId,
+          clientName: finalClientName,
+          clientEmail: finalClientEmail,
+          workspaceId: params.workspaceId,
+          contractType: "milestone",
+          status: "accepted",
+          title: name,
+          summary: `Uploaded contract document: ${name}`,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: decoded.uid,
+          documentUrl: downloadUrl,
+        })
+
+        // 2. Only create client-dependent deliverables and invoices if client bridging is active
+        if (finalClientId) {
           const nowIso = new Date().toISOString()
           const issueDate = nowIso
           const dueDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
@@ -189,29 +243,11 @@ export async function POST(
           
           const amountCents = 150000 // default $1,500.00
           
-          // 1. Create the BeamContract record
-          const contractRef = db.collection("contracts").doc()
-          await contractRef.set({
-            clientId: wsClientId,
-            clientName: typeof wsData.name === "string" ? wsData.name : (typeof wsData.workspaceName === "string" ? wsData.workspaceName : wsClientId),
-            clientEmail: wsClientEmail || userEmail.toLowerCase(),
-            workspaceId: params.workspaceId,
-            contractType: "milestone",
-            status: "accepted",
-            title: name,
-            summary: `Uploaded contract document: ${name}`,
-            createdAt: now,
-            updatedAt: now,
-            createdBy: decoded.uid,
-            documentUrl: downloadUrl,
-          })
-
-          // 2. Create the ClientInvoice and ClientDeliverable records
-          const invoiceRef = db.collection("clients").doc(wsClientId).collection("invoices").doc()
-          const deliverableRef = db.collection("clients").doc(wsClientId).collection("deliverables").doc()
+          const invoiceRef = db.collection("clients").doc(finalClientId).collection("invoices").doc()
+          const deliverableRef = db.collection("clients").doc(finalClientId).collection("deliverables").doc()
 
           const invoicePayload = {
-            clientId: wsClientId,
+            clientId: finalClientId,
             workspaceId: params.workspaceId,
             contractId: contractRef.id,
             deliverableId: deliverableRef.id,
@@ -257,14 +293,14 @@ export async function POST(
           }
 
           const deliverablePayload = {
-            clientId: wsClientId,
+            clientId: finalClientId,
             workspaceId: params.workspaceId,
             projectId: null,
             title: `Milestone Invoice - ${name.replace(/\.[^/.]+$/, "")}`,
             summary: `Invoice ${invoiceNumber}`,
             liveUrl: "",
             screenshotUrls: [],
-            amount: amountCents,
+            amount: amountCents / 100, // Deliverables expect dollars
             status: "pending",
             invoiceId: invoiceRef.id,
             createdAt: nowIso,
