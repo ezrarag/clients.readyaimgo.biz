@@ -5751,6 +5751,76 @@ export default function WorkspacePage() {
                   </Card>
                 )}
 
+                {/* ── Client Retainer Vault Deposit & Drawdown History ── */}
+                <Card className="border border-slate-200/80 bg-white shadow-sm">
+                  <CardHeader>
+                    <CardTitle className="text-slate-900 text-lg flex items-center justify-between">
+                      <span>Retainer Vault & Drawdown History</span>
+                      <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700">
+                        Balance: {currencyFormatter.format(paymentData.retainerBalance ?? 0)}
+                      </Badge>
+                    </CardTitle>
+                    <CardDescription>
+                      Itemized escrow receipts (CashApp, Apple Pay, Stripe) and authorized drawdowns with statements of purpose.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead className="border-y border-slate-100 bg-slate-50 text-left text-slate-500 uppercase tracking-wider font-medium">
+                          <tr>
+                            <th className="px-4 py-3">Date</th>
+                            <th className="px-4 py-3">Type</th>
+                            <th className="px-4 py-3">Statement of Purpose / Description</th>
+                            <th className="px-4 py-3 text-right">Amount</th>
+                            <th className="px-4 py-3 text-right">Vault Balance</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {!paymentData.retainerTransactions || paymentData.retainerTransactions.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="px-4 py-6 text-center text-slate-400">
+                                No retainer transactions logged yet. Payments received via CashApp or escrow will appear here.
+                              </td>
+                            </tr>
+                          ) : (
+                            paymentData.retainerTransactions.map((tx: any) => (
+                              <tr key={tx.id} className="hover:bg-slate-50/60">
+                                <td className="px-4 py-3 text-slate-500 whitespace-nowrap">
+                                  {new Date(tx.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                                </td>
+                                <td className="px-4 py-3">
+                                  {tx.type === "deposit" ? (
+                                    <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 uppercase text-[10px]">
+                                      {tx.channel || "DEPOSIT"}
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="border-orange-500/30 bg-orange-500/10 text-orange-700 uppercase text-[10px]">
+                                      DRAWDOWN
+                                    </Badge>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3">
+                                  <p className="font-semibold text-slate-800">{tx.senderOrPurpose}</p>
+                                  {tx.statementOfPurpose && tx.statementOfPurpose !== tx.senderOrPurpose && (
+                                    <p className="italic text-slate-500 text-[11px] mt-0.5">"{tx.statementOfPurpose}"</p>
+                                  )}
+                                </td>
+                                <td className={`px-4 py-3 text-right font-semibold whitespace-nowrap ${tx.type === "deposit" ? "text-emerald-700" : "text-orange-700"}`}>
+                                  {tx.type === "deposit" ? "+" : "-"}{currencyFormatter.format((tx.amountCents ?? 0) / 100)}
+                                </td>
+                                <td className="px-4 py-3 text-right font-mono text-slate-500 whitespace-nowrap">
+                                  {currencyFormatter.format((tx.balanceAfterCents ?? 0) / 100)}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+
                 {/* ── Invoices Section ── */}
                 {paymentData.invoices && paymentData.invoices.length > 0 && (
                   <Card>

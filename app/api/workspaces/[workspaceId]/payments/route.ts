@@ -203,7 +203,7 @@ export async function GET(
 
     // Parallel fetches — each soft-fails independently so a missing subcollection
     // doesn't block the whole response.
-    const [profileSnap, paymentsSnap, deliverablesSnap, invoicesSnap] = await Promise.all([
+    const [profileSnap, paymentsSnap, deliverablesSnap, invoicesSnap, clientDocSnap, retainerLedgerSnap] = await Promise.all([
       profileRef.get().catch(() => null),
       profileRef
         .collection(VALUE_PROFILE_PAYMENTS_COLLECTION)
@@ -211,19 +211,29 @@ export async function GET(
         .limit(20)
         .get()
         .catch(() => null),
-      // Fetch all deliverables; filter to pending client-side to avoid needing
-      // a composite index on (status, createdAt).
       db
         .collection("clients")
         .doc(clientId)
         .collection("deliverables")
         .get()
         .catch(() => null),
-      // Fetch invoices for the client
       db
         .collection("clients")
         .doc(clientId)
         .collection("invoices")
+        .get()
+        .catch(() => null),
+      db
+        .collection("clients")
+        .doc(clientId)
+        .get()
+        .catch(() => null),
+      db
+        .collection("clients")
+        .doc(clientId)
+        .collection("retainerLedger")
+        .orderBy("createdAt", "desc")
+        .limit(50)
         .get()
         .catch(() => null),
     ])
@@ -251,11 +261,24 @@ export async function GET(
       .map((d) => normalizeInvoice(d.id, d.data() as Record<string, unknown>))
       .filter((inv) => !inv.workspaceId || inv.workspaceId === params.workspaceId)
 
+    const clientData = clientDocSnap?.exists ? (clientDocSnap.data() as Record<string, unknown>) : {}
+    const liveRetainerBalance = typeof clientData.retainerBalanceCents === "number"
+      ? clientData.retainerBalanceCents / 100
+      : typeof clientData.retainerBalance === "number"
+      ? clientData.retainerBalance
+      : retainerBalance
+
+    const retainerTransactions = (retainerLedgerSnap?.docs ?? []).map((d) => ({
+      id: d.id,
+      ...(d.data() as Record<string, unknown>),
+    }))
+
     return NextResponse.json({
       clientId,
       stripeCustomerId: profile.stripeCustomerId ?? null,
       totalPaid: profile.totalPaid,
-      retainerBalance,
+      retainerBalance: liveRetainerBalance,
+      retainerTransactions,
       ledger,
       payments,
       deliverables,
