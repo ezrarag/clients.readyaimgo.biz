@@ -5547,8 +5547,8 @@ export default function WorkspacePage() {
                       const latestStripe = paymentData.payments[0]
                       let latestChannelLabel = "STRIPE"
                       if (latestDeposit && latestStripe) {
-                        const depTime = new Date(latestDeposit.createdAt).getTime()
-                        const stripeTime = new Date(latestStripe.createdAt).getTime()
+                        const depTime = new Date(latestDeposit.createdAt || 0).getTime()
+                        const stripeTime = new Date(latestStripe.createdAt || 0).getTime()
                         if (depTime > stripeTime) {
                           latestChannelLabel = (latestDeposit.channel || "CASHAPP").toUpperCase()
                         }
