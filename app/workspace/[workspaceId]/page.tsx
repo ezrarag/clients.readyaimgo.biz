@@ -5541,16 +5541,42 @@ export default function WorkspacePage() {
                         )
                       ) : null}
                     </div>
-                    {/* Stripe Receipts */}
-                    <div className="rounded-2xl border border-border bg-white/80 p-5">
-                      <p className="flex items-center text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                        Stripe Receipts
-                        <InfoTooltip text="Total client payments recorded through the value profile ledger." />
-                      </p>
-                      <p className="mt-3 text-2xl font-bold text-slate-900">
-                        {currencyFormatter.format(paymentData.totalPaid)}
-                      </p>
-                    </div>
+                    {/* Payment Receipts & Latest Channel */}
+                    {(() => {
+                      const latestDeposit = (paymentData.retainerTransactions || []).find((tx: any) => tx.type === "deposit")
+                      const latestStripe = paymentData.payments[0]
+                      let latestChannelLabel = "STRIPE"
+                      if (latestDeposit && latestStripe) {
+                        const depTime = new Date(latestDeposit.createdAt).getTime()
+                        const stripeTime = new Date(latestStripe.createdAt).getTime()
+                        if (depTime > stripeTime) {
+                          latestChannelLabel = (latestDeposit.channel || "CASHAPP").toUpperCase()
+                        }
+                      } else if (latestDeposit) {
+                        latestChannelLabel = (latestDeposit.channel || "CASHAPP").toUpperCase()
+                      }
+
+                      const totalDepositPaid = (paymentData.retainerTransactions || [])
+                        .filter((tx: any) => tx.type === "deposit")
+                        .reduce((sum: number, tx: any) => sum + (tx.amountCents || 0) / 100, 0)
+
+                      return (
+                        <div className="rounded-2xl border border-border bg-white/80 p-5">
+                          <div className="flex items-center justify-between gap-1 flex-wrap">
+                            <p className="flex items-center text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                              Total Receipts
+                              <InfoTooltip text="Total client payments recorded across CashApp, Apple Pay, Zelle, Bank Transfer, and Stripe." />
+                            </p>
+                            <Badge variant="secondary" className="text-[10px] uppercase font-mono bg-slate-100 text-slate-700">
+                              Latest: {latestChannelLabel}
+                            </Badge>
+                          </div>
+                          <p className="mt-3 text-2xl font-bold text-slate-900">
+                            {currencyFormatter.format(Math.max(paymentData.totalPaid, totalDepositPaid))}
+                          </p>
+                        </div>
+                      )
+                    })()}
                   </CardContent>
                 </Card>
 
