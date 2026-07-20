@@ -114,6 +114,7 @@ interface WorkspacePaymentData {
   totalPaid: number
   retainerBalance: number
   retainerTransactions?: any[]
+  discoveryCosts?: any[]
   ledger: WorkspaceLedgerEntry[]
   payments: ValuePaymentRecord[]
   deliverables: ClientDeliverable[]
@@ -5471,32 +5472,35 @@ export default function WorkspacePage() {
                         ) : (
                           /* Webdev / default — Build Cost Comparison */
                           <div className="mt-4 space-y-3">
-                            {[
-                              {
-                                name: "Squarespace",
-                                range: "$23–65 / mo",
-                                scope: "Partial",
-                                notes: "Templates only. No custom logic, no API integrations, no ownership.",
-                                variant: "secondary" as const,
-                              },
-                              {
-                                name: "WordPress",
-                                range: "$25–200+ / mo",
-                                scope: "Limited",
-                                notes: "Plugin-dependent. Maintenance overhead, security risk, no product roadmap.",
-                                variant: "secondary" as const,
-                              },
-                              {
-                                name: "ReadyAimGo Nexus",
-                                range: "$50 / mo",
-                                scope: "Full scope",
-                                notes: "Custom-built, client-owned, hosted, maintained, and continuously delivered.",
-                                variant: "success" as const,
-                              },
-                            ].map((row) => (
+                            {(paymentData.discoveryCosts && paymentData.discoveryCosts.length > 0
+                              ? paymentData.discoveryCosts
+                              : [
+                                  {
+                                    name: "Squarespace",
+                                    range: "$23–65 / mo",
+                                    scope: "Partial",
+                                    notes: "Templates only. No custom logic, no API integrations, no ownership.",
+                                    variant: "secondary" as const,
+                                  },
+                                  {
+                                    name: "WordPress",
+                                    range: "$25–200+ / mo",
+                                    scope: "Limited",
+                                    notes: "Plugin-dependent. Maintenance overhead, security risk, no product roadmap.",
+                                    variant: "secondary" as const,
+                                  },
+                                  {
+                                    name: "ReadyAimGo Nexus",
+                                    range: "$50 / mo",
+                                    scope: "Full scope",
+                                    notes: "Custom-built, client-owned, hosted, maintained, and continuously delivered.",
+                                    variant: "success" as const,
+                                  },
+                                ]
+                            ).map((row: any) => (
                               <div key={row.name} className="rounded-xl bg-white/70 px-3 py-2">
                                 <div className="flex items-start justify-between gap-2">
-                                  {row.name === "ReadyAimGo Nexus" ? (
+                                  {row.name.includes("ReadyAimGo") ? (
                                     <a
                                       href="https://www.readyaimgo.biz/services/nexus"
                                       target="_blank"
@@ -5511,7 +5515,7 @@ export default function WorkspacePage() {
                                     </p>
                                   )}
                                   <div className="flex shrink-0 items-center gap-1.5">
-                                    <Badge variant={row.variant} className="text-[10px]">
+                                    <Badge variant={row.variant === "success" ? "success" : "secondary"} className="text-[10px]">
                                       {row.scope}
                                     </Badge>
                                     <span className="text-[11px] font-semibold text-slate-700">

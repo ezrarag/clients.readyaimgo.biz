@@ -273,12 +273,15 @@ export async function GET(
       ...(d.data() as Record<string, unknown>),
     }))
 
+    const discoveryCosts = Array.isArray(clientData.discoveryCosts) ? clientData.discoveryCosts : []
+
     return NextResponse.json({
       clientId,
       stripeCustomerId: profile.stripeCustomerId ?? null,
       totalPaid: profile.totalPaid,
       retainerBalance: liveRetainerBalance,
       retainerTransactions,
+      discoveryCosts,
       ledger,
       payments,
       deliverables,
