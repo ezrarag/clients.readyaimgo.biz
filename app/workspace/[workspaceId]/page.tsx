@@ -113,6 +113,7 @@ interface WorkspacePaymentData {
   stripeCustomerId: string | null
   totalPaid: number
   retainerBalance: number
+  retainerTransactions?: any[]
   ledger: WorkspaceLedgerEntry[]
   payments: ValuePaymentRecord[]
   deliverables: ClientDeliverable[]
@@ -5694,7 +5695,7 @@ export default function WorkspacePage() {
                                     Paid Amount: {currencyFormatter.format(invoice.totalCents / 100)}
                                   </p>
                                 </div>
-                                <Badge variant="outline" className="border-amber-500/30 text-amber-700 bg-amber-500/10 uppercase font-semibold text-[10px]">
+                                <Badge variant="secondary" className="border-amber-500/30 text-amber-700 bg-amber-500/10 uppercase font-semibold text-[10px]">
                                   {allocation.directedTo} Subscription
                                 </Badge>
                               </div>
@@ -5756,7 +5757,7 @@ export default function WorkspacePage() {
                   <CardHeader>
                     <CardTitle className="text-slate-900 text-lg flex items-center justify-between">
                       <span>Retainer Vault & Drawdown History</span>
-                      <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700">
+                      <Badge variant="secondary" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700">
                         Balance: {currencyFormatter.format(paymentData.retainerBalance ?? 0)}
                       </Badge>
                     </CardTitle>
@@ -5791,11 +5792,11 @@ export default function WorkspacePage() {
                                 </td>
                                 <td className="px-4 py-3">
                                   {tx.type === "deposit" ? (
-                                    <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 uppercase text-[10px]">
+                                    <Badge variant="secondary" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 uppercase text-[10px]">
                                       {tx.channel || "DEPOSIT"}
                                     </Badge>
                                   ) : (
-                                    <Badge variant="outline" className="border-orange-500/30 bg-orange-500/10 text-orange-700 uppercase text-[10px]">
+                                    <Badge variant="secondary" className="border-orange-500/30 bg-orange-500/10 text-orange-700 uppercase text-[10px]">
                                       DRAWDOWN
                                     </Badge>
                                   )}
