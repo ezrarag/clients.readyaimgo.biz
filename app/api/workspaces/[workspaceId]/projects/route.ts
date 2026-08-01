@@ -163,6 +163,99 @@ export async function GET(
   }
 }
 
+export async function POST(
+  request: NextRequest,
+  { params }: { params: { workspaceId: string } }
+) {
+  try {
+    const idToken = getBearerToken(request)
+    if (!idToken) return NextResponse.json({ error: "Unauthorized." }, { status: 401 })
+
+    const decoded = await getAdminAuth().verifyIdToken(idToken)
+    const db = getAdminDb()
+    await assertWorkspaceRole(db, params.workspaceId, decoded.uid, "beam-participant")
+
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const title = typeof body.title === "string" ? body.title.trim() : ""
+    const description = typeof body.description === "string" ? body.description.trim() : ""
+    const projectType =
+      body.projectType === "participant" ||
+      body.projectType === "transportation" ||
+      body.projectType === "real-estate" ||
+      body.projectType === "webdev"
+        ? body.projectType
+        : "webdev"
+
+    if (!title || !description) {
+      return NextResponse.json(
+        { error: "A project name and description are required." },
+        { status: 400 }
+      )
+    }
+
+    const workspaceSnap = await db.collection("workspaces").doc(params.workspaceId).get()
+    if (!workspaceSnap.exists) {
+      return NextResponse.json({ error: "Workspace not found." }, { status: 404 })
+    }
+
+    const workspace = workspaceSnap.data() as Record<string, unknown>
+    const userSnap = await db.collection("users").doc(decoded.uid).get().catch(() => null)
+    const user = userSnap?.exists ? (userSnap.data() as Record<string, unknown>) : {}
+    const clientId = typeof workspace.clientId === "string" ? workspace.clientId : null
+    const clientName =
+      (typeof workspace.businessName === "string" && workspace.businessName) ||
+      (typeof workspace.name === "string" && workspace.name) ||
+      params.workspaceId
+    const clientEmail =
+      (typeof decoded.email === "string" && decoded.email) ||
+      (typeof user.email === "string" && user.email) ||
+      null
+    const clientNameFromUser =
+      (typeof decoded.name === "string" && decoded.name) ||
+      (typeof user.displayName === "string" && user.displayName) ||
+      clientName
+
+    const feedbackRef = db.collection("clientFeedback").doc()
+    await feedbackRef.set({
+      id: feedbackRef.id,
+      workspaceId: params.workspaceId,
+      clientId,
+      projectId: null,
+      projectTitle: title,
+      projectType,
+      clientName: clientNameFromUser,
+      clientEmail,
+      rawText: description,
+      summary: `${title}: ${description}`,
+      category: "feature",
+      urgency: "medium",
+      actionable: true,
+      suggestedAction: "Review this request and convert it into a canonical workspace project.",
+      pulseScore: 5,
+      status: "open",
+      source: "workspace-project-request",
+      agentContextStatus: "ready",
+      createdByUid: decoded.uid,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    })
+
+    return NextResponse.json(
+      {
+        success: true,
+        request: { id: feedbackRef.id, title, description, projectType, status: "open" },
+      },
+      { status: 201 }
+    )
+  } catch (error) {
+    if (error instanceof WorkspaceAuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.status })
+    }
+    console.error("POST /workspaces/[workspaceId]/projects error:", error)
+    return NextResponse.json({ error: "Unable to submit the project request." }, { status: 500 })
+  }
+}
+
 export async function DELETE(
   request: NextRequest,
   { params }: { params: { workspaceId: string } }

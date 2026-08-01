@@ -30,6 +30,8 @@ import {
   UserPlus,
   Users,
   Video,
+  Play,
+  Pause,
 } from "lucide-react"
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage"
 
@@ -1159,6 +1161,13 @@ export default function WorkspacePage() {
   const [projectSuggestionDraft, setProjectSuggestionDraft] = useState("")
   const [projectSuggestionPriority, setProjectSuggestionPriority] = useState<"low" | "medium" | "high">("medium")
   const [projectSuggestionSaving, setProjectSuggestionSaving] = useState(false)
+  const [projectRequestOpen, setProjectRequestOpen] = useState(false)
+  const [projectRequestSaving, setProjectRequestSaving] = useState(false)
+  const [projectRequestForm, setProjectRequestForm] = useState({
+    title: "",
+    description: "",
+    projectType: "webdev" as AssetProjectType,
+  })
   const [taskDrafts, setTaskDrafts] = useState<Record<string, TaskDraftState>>({})
   const [creatingTaskFor, setCreatingTaskFor] = useState<string | null>(null)
   const [correspondence, setCorrespondence] = useState<CorrespondenceItem[]>([])
@@ -1288,6 +1297,29 @@ export default function WorkspacePage() {
     () => Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Chicago",
     []
   )
+
+  const submitProjectRequest = async () => {
+    if (!user || !projectRequestForm.title.trim() || !projectRequestForm.description.trim()) return
+    setProjectRequestSaving(true)
+    setError(null)
+    try {
+      await apiFetch(
+        user,
+        `/api/workspaces/${params.workspaceId}/projects`,
+        {
+          method: "POST",
+          body: JSON.stringify(projectRequestForm),
+        }
+      )
+      setProjectRequestForm({ title: "", description: "", projectType: "webdev" })
+      setProjectRequestOpen(false)
+      setMessage("Project request sent to Ready Aim Go for review.")
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to submit project request.")
+    } finally {
+      setProjectRequestSaving(false)
+    }
+  }
   const joinMeetingProvider = useMemo(() => {
     const providers =
       meetingProviders.length > 0 ? meetingProviders : workspace?.meetingProviders ?? []
@@ -3274,11 +3306,17 @@ export default function WorkspacePage() {
               </CardContent>
             </Card>
 
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Projects
-              </h2>
-              <HelpMark text="Project cards are multi-asset containers. Switch the selector to view code delivery, participant cohorts, transportation assets, or property locations without exposing irrelevant technical strings." />
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Projects
+                </h2>
+                <HelpMark text="Projects are separate pieces of work inside this client workspace. You can request another project without creating a second workspace." />
+              </div>
+              <Button type="button" size="sm" onClick={() => setProjectRequestOpen(true)}>
+                <Plus className="mr-2 h-3.5 w-3.5" />
+                Request a project
+              </Button>
             </div>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {projectCards.length === 0 ? (
@@ -3761,6 +3799,55 @@ export default function WorkspacePage() {
             ) : null}
           </div>
         </TabsContent>
+
+        <Dialog open={projectRequestOpen} onOpenChange={setProjectRequestOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Request another project</DialogTitle>
+              <DialogDescription>
+                Describe the outcome you want. Ready Aim Go will review the request before creating technical infrastructure or billing.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <Input
+                value={projectRequestForm.title}
+                onChange={(event) => setProjectRequestForm((current) => ({ ...current, title: event.target.value }))}
+                placeholder="Website prototype"
+              />
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={projectRequestForm.projectType}
+                onChange={(event) => setProjectRequestForm((current) => ({
+                  ...current,
+                  projectType: event.target.value as AssetProjectType,
+                }))}
+              >
+                {ASSET_PROJECT_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>{type.label}</option>
+                ))}
+              </select>
+              <Textarea
+                value={projectRequestForm.description}
+                onChange={(event) => setProjectRequestForm((current) => ({ ...current, description: event.target.value }))}
+                placeholder="What should this project accomplish, and who is it for?"
+                className="min-h-[140px]"
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setProjectRequestOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void submitProjectRequest()}
+                disabled={projectRequestSaving || !projectRequestForm.title.trim() || !projectRequestForm.description.trim()}
+              >
+                {projectRequestSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Send request
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* ── Deliverables ── */}
         <TabsContent value="deliverables">
@@ -6977,6 +7064,197 @@ function IntakeQuestionnaire({
   )
 }
 
+function AudioOverviewPlayer({ podcastScript }: { podcastScript: string }) {
+  const [playing, setPlaying] = useState(false)
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [currentSpeaker, setCurrentSpeaker] = useState<string | null>(null)
+  const [currentText, setCurrentText] = useState("")
+  const synthRef = useRef<SpeechSynthesis | null>(null)
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
+
+  const dialogueLines = useMemo(() => {
+    return podcastScript
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.includes(":"))
+      .map((line) => {
+        const idx = line.indexOf(":")
+        return {
+          speaker: line.substring(0, idx).trim(),
+          text: line.substring(idx + 1).trim(),
+        }
+      })
+  }, [podcastScript])
+
+  const speakLine = (index: number) => {
+    if (!synthRef.current || index >= dialogueLines.length) {
+      setPlaying(false)
+      setCurrentSpeaker(null)
+      setCurrentText("")
+      return
+    }
+
+    const currentLine = dialogueLines[index]
+    setCurrentIndex(index)
+    setCurrentSpeaker(currentLine.speaker)
+    setCurrentText(currentLine.text)
+
+    const utterance = new SpeechSynthesisUtterance(currentLine.text)
+    utteranceRef.current = utterance
+
+    const voices = synthRef.current.getVoices()
+    const hostAVoices = voices.filter((v) => v.name.includes("Google") || v.name.includes("Samantha") || v.lang.startsWith("en"))
+    const hostBVoices = voices.filter((v) => v.name.includes("Google") || v.name.includes("Daniel") || v.lang.startsWith("en"))
+
+    if (currentLine.speaker.toLowerCase().includes("host a")) {
+      utterance.voice = hostAVoices[0] || voices[0]
+      utterance.rate = 1.0
+      utterance.pitch = 1.0
+    } else {
+      utterance.voice = hostBVoices[1] || hostBVoices[0] || voices[1] || voices[0]
+      utterance.rate = 1.05
+      utterance.pitch = 0.95
+    }
+
+    utterance.onend = () => {
+      speakLine(index + 1)
+    }
+
+    utterance.onerror = () => {
+      setPlaying(false)
+    }
+
+    synthRef.current.speak(utterance)
+  }
+
+  const handlePlayPause = () => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return
+    if (!synthRef.current) {
+      synthRef.current = window.speechSynthesis
+    }
+
+    if (playing) {
+      synthRef.current.cancel()
+      setPlaying(false)
+    } else {
+      setPlaying(true)
+      speakLine(currentIndex)
+    }
+  }
+
+  const handleReset = () => {
+    if (synthRef.current) {
+      synthRef.current.cancel()
+    }
+    setPlaying(false)
+    setCurrentIndex(0)
+    setCurrentSpeaker(null)
+    setCurrentText("")
+  }
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel()
+      }
+    }
+  }, [])
+
+  return (
+    <div className="rounded-xl border bg-slate-900 text-white p-4 space-y-4 shadow-inner relative overflow-hidden">
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(99,102,241,0.15),transparent)] pointer-events-none" />
+      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+        <div className="flex items-center gap-2">
+          <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">NotebookLM Audio Overview</p>
+        </div>
+        <button onClick={handleReset} className="text-[10px] text-slate-500 hover:text-slate-300">
+          Reset Player
+        </button>
+      </div>
+
+      <div className="flex items-center gap-4 py-2 relative z-10">
+        <button
+          onClick={handlePlayPause}
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white shadow hover:bg-indigo-700 transition"
+        >
+          {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5 ml-0.5" />}
+        </button>
+        <div className="space-y-1 flex-1">
+          <p className="text-xs font-medium text-indigo-400">{currentSpeaker || "Ready to Stream"}</p>
+          <p className="text-xs font-semibold text-slate-200 line-clamp-2 leading-relaxed">
+            {currentText || "Click play to listen to the conversational AI podcast overview of these features."}
+          </p>
+        </div>
+      </div>
+
+      {playing && (
+        <div className="flex items-center gap-0.5 h-6 justify-center">
+          {[...Array(12)].map((_, i) => (
+            <div
+              key={i}
+              className="w-1 bg-indigo-500/80 rounded-full animate-bounce"
+              style={{
+                height: `${Math.floor(Math.random() * 16) + 6}px`,
+                animationDelay: `${i * 0.08}s`,
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function InteractiveFeatureMap({ items }: { items: any[] }) {
+  const [completedFeatures, setCompletedFeatures] = useState<Record<string, boolean>>({})
+
+  const toggleFeature = (id: string) => {
+    setCompletedFeatures((prev) => ({ ...prev, [id]: !prev[id] }))
+  }
+
+  if (!items || items.length === 0) {
+    return <p className="text-xs text-muted-foreground">No sandbox features cataloged in this release.</p>
+  }
+
+  return (
+    <div className="space-y-3 bg-muted/20 p-3 rounded-lg border">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Interactive Feature Checklist</p>
+      <div className="space-y-2.5">
+        {items.map((item) => (
+          <div key={item.id} className="p-3 rounded-lg border bg-card flex items-start gap-3 hover:shadow-sm transition">
+            <button
+              onClick={() => toggleFeature(item.id)}
+              className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-indigo-300 text-white bg-indigo-50 hover:bg-indigo-100 transition"
+            >
+              {completedFeatures[item.id] && <div className="h-2.5 w-2.5 rounded-sm bg-indigo-600" />}
+            </button>
+            <div className="space-y-1 flex-1">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-slate-700">{item.title}</p>
+                <Badge variant={item.status === "completed" ? "success" : "secondary"}>
+                  {item.status}
+                </Badge>
+              </div>
+              <p className="text-xs text-slate-500 leading-relaxed">{item.details}</p>
+              {item.filesChanged && item.filesChanged.length > 0 && (
+                <div className="pt-1 flex flex-wrap gap-1.5 items-center">
+                  <span className="text-[10px] text-muted-foreground font-medium">Impacted:</span>
+                  {item.filesChanged.map((file: string, index: number) => (
+                    <span key={index} className="text-[9px] font-mono bg-muted px-1.5 py-0.5 rounded text-slate-600">
+                      {file.split("/").pop()}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function UpdateCard({
   update,
   uid,
@@ -7013,6 +7291,73 @@ function UpdateCard({
   const postedLabel = Number.isNaN(postedAt.getTime())
     ? "Date pending"
     : postedAt.toLocaleDateString()
+
+  if (update.type === "release_notes") {
+    return (
+      <Card className={cn("border shadow-sm", unread && "border-indigo-400 bg-indigo-50/10")}>
+        <CardHeader className="pb-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              {unread ? (
+                <Badge className="mb-1 bg-indigo-500 text-[10px] text-white">New Release</Badge>
+              ) : null}
+              {update.pinned ? (
+                <Badge variant="secondary" className="mb-1 ml-1 text-[10px]">
+                  Pinned
+                </Badge>
+              ) : null}
+              <CardTitle className="text-base flex items-center gap-1.5 text-indigo-700">
+                <Sparkles className="h-4 w-4 text-indigo-500" />
+                {update.title}
+              </CardTitle>
+            </div>
+            <span className="whitespace-nowrap text-xs text-muted-foreground">{postedLabel}</span>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <Tabs defaultValue="notes" className="space-y-4">
+            <TabsList className="grid grid-cols-4 bg-muted/60 p-0.5 rounded-lg text-xs">
+              <TabsTrigger value="notes" className="text-[10px] py-1">Notes</TabsTrigger>
+              <TabsTrigger value="audio" className="text-[10px] py-1">Podcast</TabsTrigger>
+              <TabsTrigger value="features" className="text-[10px] py-1">Sandbox</TabsTrigger>
+              <TabsTrigger value="export" className="text-[10px] py-1">Export</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="notes" className="space-y-2">
+              <div className="prose max-w-full text-xs text-slate-600 leading-relaxed bg-muted/30 p-3 rounded-lg border whitespace-pre-line">
+                {update.description || "No written description provided."}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="audio" className="space-y-2">
+              <AudioOverviewPlayer podcastScript={update.podcastScript || ""} />
+            </TabsContent>
+
+            <TabsContent value="features" className="space-y-2">
+              <InteractiveFeatureMap items={update.interactiveFeatureMap || []} />
+            </TabsContent>
+
+            <TabsContent value="export" className="space-y-3 py-2 text-center">
+              <p className="text-[11px] text-muted-foreground">
+                Compile and print a clean PDF report of this update for your records.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  window.print()
+                }}
+                className="gap-1.5 text-xs"
+              >
+                <Download className="h-4 w-4" />
+                Print Release Report
+              </Button>
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
+    )
+  }
 
   return (
     <Card className={cn("border", unread && "border-blue-400 bg-blue-50/30")}>

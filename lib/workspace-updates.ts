@@ -6,8 +6,16 @@
  * posted by beam-admin, then surfaced to clients with unread badges.
  */
 
-export const WORKSPACE_UPDATE_TYPES = ["video", "note", "loom"] as const
+export const WORKSPACE_UPDATE_TYPES = ["video", "note", "loom", "release_notes"] as const
 export type WorkspaceUpdateType = (typeof WORKSPACE_UPDATE_TYPES)[number]
+
+export interface FeatureMapItem {
+  id: string
+  title: string
+  status: "completed" | "in_progress" | "pending"
+  filesChanged: string[]
+  details: string
+}
 
 export interface WorkspaceUpdate {
   id: string
@@ -24,6 +32,9 @@ export interface WorkspaceUpdate {
   workspaceId: string
   /** Pinned updates show first. */
   pinned: boolean
+  audioUrl?: string
+  podcastScript?: string
+  interactiveFeatureMap?: FeatureMapItem[]
 }
 
 // ─── Serialization helpers ────────────────────────────────────────────────────
@@ -79,6 +90,9 @@ export function normalizeWorkspaceUpdate(
       : [],
     workspaceId: typeof data.workspaceId === "string" ? data.workspaceId : "",
     pinned: data.pinned === true,
+    audioUrl: typeof data.audioUrl === "string" ? data.audioUrl : undefined,
+    podcastScript: typeof data.podcastScript === "string" ? data.podcastScript : undefined,
+    interactiveFeatureMap: Array.isArray(data.interactiveFeatureMap) ? (data.interactiveFeatureMap as FeatureMapItem[]) : undefined,
   }
 }
 
