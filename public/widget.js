@@ -16,6 +16,35 @@
   const apiBaseUrl = scriptTag ? scriptTag.getAttribute('data-api-url') : 'https://clients.readyaimgo.biz';
   const storageBucket = 'readyaimgo-ab187.firebasestorage.app';
 
+  // Play synthesised audio chime to confirm feedback submission
+  function playChime() {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, now); // C5
+      osc.frequency.setValueAtTime(659.25, now + 0.08); // E5
+      osc.frequency.setValueAtTime(783.99, now + 0.16); // G5
+      
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.12, now + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.start(now);
+      osc.stop(now + 0.5);
+    } catch (e) {
+      console.warn('Failed to play confirmation audio:', e);
+    }
+  }
+
   // 2. Inject Styles
   const style = document.createElement('style');
   style.textContent = `
@@ -489,7 +518,7 @@
       
       const canvas = await window.html2canvas(document.body, {
         useCORS: true,
-        allowTaint: true,
+        allowTaint: false,
         logging: false,
       });
 
@@ -732,6 +761,7 @@
       // Show Success state
       formBody.style.display = 'none';
       successBody.style.display = 'block';
+      playChime();
 
       if (data.interpretation) {
         successSummary.textContent = data.interpretation.summary;
