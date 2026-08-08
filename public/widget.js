@@ -368,7 +368,10 @@
           <p id="rag-success-summary" style="margin: 0 0 8px; color: #4b5563; line-height: 1.4;"></p>
           <div id="rag-badges"></div>
         </div>
-        <button class="rag-widget-submit" id="rag-reset-btn" style="width: 100%;">Leave More Feedback</button>
+        <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px;">
+          <a href="${apiBaseUrl}/dashboard" target="_blank" rel="noopener noreferrer" class="rag-widget-submit" style="display: block; text-decoration: none; text-align: center; background: #4f46e5; color: #ffffff; padding: 8px; font-size: 12px;">Go to Client Dashboard</a>
+          <button class="rag-widget-submit" id="rag-reset-btn" style="width: 100%; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e0; padding: 8px; font-size: 12px;">Leave More Feedback</button>
+        </div>
       </div>
     </div>
     

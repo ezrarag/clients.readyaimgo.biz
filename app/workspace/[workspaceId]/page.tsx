@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { collection, doc, getDoc, limit, onSnapshot, orderBy, query } from "firebase/firestore"
+import { collection, doc, getDoc, limit, onSnapshot, orderBy, query, where } from "firebase/firestore"
 import {
   CheckCircle,
   CalendarDays,
@@ -1225,6 +1225,8 @@ export default function WorkspacePage() {
   const [insufficientExpense, setInsufficientExpense] = useState<WorkspaceExpense | null>(null)
   // Active tab — read from URL on mount so Stripe can redirect back to ?tab=payments
   const [activeTab, setActiveTab] = useState("projects")
+  const [feedback, setFeedback] = useState<any[]>([])
+  const [feedbackLoading, setFeedbackLoading] = useState(true)
   // AI contract draft dialog
   const [draftDialogOpen, setDraftDialogOpen] = useState(false)
   const [accountInfoOpen, setAccountInfoOpen] = useState(false)
@@ -1693,6 +1695,42 @@ export default function WorkspacePage() {
 
     return () => unsubscribe()
   }, [params.workspaceId, user])
+
+  useEffect(() => {
+    if (!user || !workspace || !workspace.projectIds || workspace.projectIds.length === 0) {
+      setFeedback([])
+      setFeedbackLoading(false)
+      return
+    }
+
+    setFeedbackLoading(true)
+    const q = query(
+      collection(getDb(), "clientFeedback"),
+      where("projectId", "in", workspace.projectIds),
+      orderBy("createdAt", "desc"),
+      limit(50)
+    )
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setFeedback(
+          snapshot.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...docSnap.data()
+          }))
+        )
+        setFeedbackLoading(false)
+      },
+      (err) => {
+        console.warn("Unable to load client feedback:", err)
+        setFeedback([])
+        setFeedbackLoading(false)
+      }
+    )
+
+    return () => unsubscribe()
+  }, [user, workspace])
 
   useEffect(() => {
     if (!user) {
@@ -3086,6 +3124,15 @@ export default function WorkspacePage() {
             {unreadCount > 0 && (
               <span className="ml-1.5 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
                 {unreadCount}
+              </span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="feedback">
+            <MessageSquare className="mr-2 h-4 w-4" />
+            Feedback
+            {feedback.filter(f => f.status !== "resolved").length > 0 && (
+              <span className="ml-1.5 rounded-full bg-indigo-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                {feedback.filter(f => f.status !== "resolved").length}
               </span>
             )}
           </TabsTrigger>
@@ -5165,6 +5212,110 @@ export default function WorkspacePage() {
                 )}
               </div>
             ) : null}
+          </div>
+        </TabsContent>
+
+        {/* ── Client Feedback ── */}
+        <TabsContent value="feedback">
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Workspace Feedback Feed</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  View and track all in-page feedback and bug reports submitted for this workspace's projects.
+                </p>
+              </div>
+            </div>
+
+            {feedbackLoading ? (
+              <div className="flex justify-center items-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
+              </div>
+            ) : feedback.length === 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+                  <MessageSquare className="h-10 w-10 text-slate-300 mb-3" />
+                  <p className="text-sm font-semibold text-slate-700">No feedback submitted yet.</p>
+                  <p className="text-xs text-slate-400 mt-1 max-w-sm">
+                    Embed the capture-and-note widget on your project pages to start collecting feedback.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                {feedback.map((item) => {
+                  const createdDate = item.createdAt 
+                    ? new Date(item.createdAt.seconds ? item.createdAt.seconds * 1000 : item.createdAt).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })
+                    : 'Date unknown';
+
+                  const isOpen = item.status !== 'resolved';
+
+                  return (
+                    <Card key={item.id} className="overflow-hidden flex flex-col justify-between">
+                      <CardHeader className="pb-3 border-b bg-slate-50/50">
+                        <div className="flex justify-between items-start gap-2">
+                          <div>
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">
+                              Submitted by {item.clientName}
+                            </span>
+                            <span className="text-xs text-slate-500 truncate block max-w-64">
+                              {item.clientEmail || 'No email provided'}
+                            </span>
+                          </div>
+                          <Badge variant={isOpen ? "warning" : "success"}>
+                            {isOpen ? "Open" : "Resolved"}
+                          </Badge>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="pt-4 space-y-4 flex-1">
+                        {item.screenshotUrl && (
+                          <div className="relative rounded-lg border overflow-hidden aspect-video bg-muted">
+                            <a href={item.screenshotUrl} target="_blank" rel="noopener noreferrer">
+                              <img src={item.screenshotUrl} alt="Feedback Screenshot" className="object-contain w-full h-full hover:scale-105 transition-transform duration-200" />
+                            </a>
+                          </div>
+                        )}
+                        <p className="text-xs text-slate-700 whitespace-pre-line leading-relaxed">
+                          {item.rawText}
+                        </p>
+                        
+                        {item.interpretation && (
+                          <div className="p-3 bg-indigo-50/40 border border-indigo-100 rounded-xl space-y-2">
+                            <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-700">
+                              <Sparkles className="h-3.5 w-3.5" />
+                              AI Analysis
+                            </div>
+                            <p className="text-[11px] text-indigo-900 leading-normal">
+                              {item.interpretation.summary}
+                            </p>
+                            <div className="flex gap-1.5 flex-wrap">
+                              <Badge variant="accent">
+                                {item.interpretation.category}
+                              </Badge>
+                              <Badge variant="warning">
+                                {item.interpretation.urgency} urgency
+                              </Badge>
+                            </div>
+                          </div>
+                        )}
+                      </CardContent>
+                      <CardFooter className="pt-2 pb-3 border-t bg-slate-50/30 flex justify-between items-center text-[10px] text-muted-foreground">
+                        <span>{createdDate}</span>
+                        <a href={item.pageUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 hover:text-indigo-600 font-semibold transition-colors">
+                          View Page <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </CardFooter>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </TabsContent>
 
