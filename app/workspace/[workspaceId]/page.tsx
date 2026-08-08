@@ -1697,7 +1697,16 @@ export default function WorkspacePage() {
   }, [params.workspaceId, user])
 
   useEffect(() => {
-    if (!user || !workspace || !workspace.projectIds || workspace.projectIds.length === 0) {
+    if (!user || !workspace) {
+      setFeedback([])
+      setFeedbackLoading(false)
+      return
+    }
+
+    const projectIds = workspace.projectIds || []
+    const targetIds = [workspace.id, ...projectIds].filter(Boolean)
+
+    if (targetIds.length === 0) {
       setFeedback([])
       setFeedbackLoading(false)
       return
@@ -1706,7 +1715,7 @@ export default function WorkspacePage() {
     setFeedbackLoading(true)
     const q = query(
       collection(getDb(), "clientFeedback"),
-      where("projectId", "in", workspace.projectIds),
+      where("projectId", "in", targetIds),
       orderBy("createdAt", "desc"),
       limit(50)
     )
