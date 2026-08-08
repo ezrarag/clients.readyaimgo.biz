@@ -219,6 +219,7 @@
       border-radius: 8px;
       font-size: 11px;
       margin-bottom: 8px;
+      line-height: 1.4;
     }
     .rag-widget-success {
       text-align: center;
@@ -239,6 +240,75 @@
     .rag-widget-badge-urgency {
       background: #fef3c7;
       color: #92400e;
+    }
+
+    /* Cropper Overlay styles */
+    .rag-cropper-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      z-index: 2147483647;
+      display: none;
+      flex-direction: column;
+    }
+    .rag-cropper-overlay.open {
+      display: flex;
+    }
+    .rag-cropper-header {
+      background: #111827;
+      padding: 14px 20px;
+      color: #ffffff;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-sizing: border-box;
+      border-bottom: 1px solid #374151;
+    }
+    .rag-cropper-container {
+      flex: 1;
+      overflow: auto;
+      background: #1f2937;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+    }
+    .rag-cropper-canvas-container {
+      position: relative;
+      cursor: crosshair;
+      margin: 24px;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .rag-cropper-btn-group {
+      display: flex;
+      gap: 10px;
+    }
+    .rag-cropper-btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: background 0.15s ease;
+    }
+    .rag-cropper-btn-cancel {
+      background: #4b5563;
+      color: #ffffff;
+    }
+    .rag-cropper-btn-cancel:hover {
+      background: #374151;
+    }
+    .rag-cropper-btn-confirm {
+      background: #4f46e5;
+      color: #ffffff;
+    }
+    .rag-cropper-btn-confirm:hover {
+      background: #4338ca;
+    }
+    .rag-cropper-btn-confirm:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
   `;
   document.head.appendChild(style);
@@ -291,7 +361,7 @@
       </div>
       <div id="rag-success-body" class="rag-widget-success" style="display: none;">
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin: 0 auto 12px; display: block;" class="lucide lucide-check-circle-2"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
-        <h4 style="margin: 0 0 4px; font-size: 14px; color: #111827; font-weight: 700;">Feedback Submitted!</h4>
+        <h4 style="margin: 0 0 4px; font-size: 14px; color: #111827; font-weight: 700;">Feedback Saved!</h4>
         <p style="margin: 0 0 12px; font-size: 11px; color: #6b7280;">Routed to the engineering pipeline.</p>
         <div id="rag-interpretation" style="display: none; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; text-align: left; font-size: 11px; margin-bottom: 12px;">
           <p style="margin: 0 0 4px; font-weight: 700; color: #374151;">AI Interpretation:</p>
@@ -301,6 +371,23 @@
         <button class="rag-widget-submit" id="rag-reset-btn" style="width: 100%;">Leave More Feedback</button>
       </div>
     </div>
+    
+    <!-- Cropper Overlay Markup -->
+    <div class="rag-cropper-overlay" id="rag-cropper-overlay">
+      <div class="rag-cropper-header">
+        <span style="font-size: 13px; font-weight: 600;">Drag a box over the snapshot to crop/focus on the issue</span>
+        <div class="rag-cropper-btn-group">
+          <button class="rag-cropper-btn rag-cropper-btn-cancel" id="rag-crop-cancel">Skip / Keep Full</button>
+          <button class="rag-cropper-btn rag-cropper-btn-confirm" id="rag-crop-confirm" disabled>Confirm Crop</button>
+        </div>
+      </div>
+      <div class="rag-cropper-container">
+        <div class="rag-cropper-canvas-container" id="rag-cropper-canvas-container">
+          <canvas id="rag-cropper-canvas" style="max-width: 100%; display: block;"></canvas>
+        </div>
+      </div>
+    </div>
+
     <button class="rag-widget-trigger" id="rag-trigger">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-camera"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
       Feedback
@@ -332,8 +419,21 @@
   const successSummary = document.getElementById('rag-success-summary');
   const badgesArea = document.getElementById('rag-badges');
 
+  // Cropper elements
+  const cropperOverlay = document.getElementById('rag-cropper-overlay');
+  const cropCancel = document.getElementById('rag-crop-cancel');
+  const cropConfirm = document.getElementById('rag-crop-confirm');
+  const cropperCanvasContainer = document.getElementById('rag-cropper-canvas-container');
+  const cropperCanvas = document.getElementById('rag-cropper-canvas');
+
   let currentScreenshot = null; // Base64 PNG dataUrl
   let isCapturing = false;
+
+  // Cropper logic variables
+  let originalCanvas = null;
+  let cropStart = null;
+  let cropEnd = null;
+  let isDrawing = false;
 
   // 5. Setup Action Listeners
   trigger.addEventListener('click', () => {
@@ -390,12 +490,21 @@
         logging: false,
       });
 
-      const dataUrl = canvas.toDataURL('image/png');
-      currentScreenshot = dataUrl;
-      
-      previewImg.src = dataUrl;
-      captureArea.style.display = 'none';
-      previewArea.style.display = 'block';
+      // Save original canvas reference
+      originalCanvas = canvas;
+
+      // Draw original canvas on the cropper canvas
+      cropperCanvas.width = canvas.width;
+      cropperCanvas.height = canvas.height;
+      drawCanvasWithMask();
+
+      // Reset selection state
+      cropStart = null;
+      cropEnd = null;
+      cropConfirm.disabled = true;
+
+      // Open cropper overlay
+      cropperOverlay.classList.add('open');
     } catch (err) {
       console.error(err);
       errorBox.textContent = 'Failed to take screenshot, but you can still submit a note.';
@@ -410,6 +519,139 @@
     }
   }
 
+  // Canvas Mask Dimming Drawing Utility
+  function drawCanvasWithMask(startX, startY, endX, endY) {
+    const ctx = cropperCanvas.getContext('2d');
+    ctx.clearRect(0, 0, cropperCanvas.width, cropperCanvas.height);
+    ctx.drawImage(originalCanvas, 0, 0);
+
+    if (startX !== undefined && endX !== undefined) {
+      const x = Math.min(startX, endX);
+      const y = Math.min(startY, endY);
+      const w = Math.abs(startX - endX);
+      const h = Math.abs(startY - endY);
+
+      if (w > 0 && h > 0) {
+        // Draw semi-transparent dimming masks surrounding selection
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        
+        // 1. Top box
+        ctx.fillRect(0, 0, cropperCanvas.width, y);
+        // 2. Bottom box
+        ctx.fillRect(0, y + h, cropperCanvas.width, cropperCanvas.height - (y + h));
+        // 3. Left box
+        ctx.fillRect(0, y, x, h);
+        // 4. Right box
+        ctx.fillRect(x + w, y, cropperCanvas.width - (x + w), h);
+
+        // Draw dashed selection border
+        ctx.strokeStyle = '#4f46e5';
+        ctx.lineWidth = Math.max(3, Math.round(cropperCanvas.width / 400));
+        ctx.setLineDash([8, 6]);
+        ctx.strokeRect(x, y, w, h);
+      }
+    }
+  }
+
+  // Coordinate computation utility
+  function getMousePos(e) {
+    const rect = cropperCanvas.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    
+    // Scale viewport clicks to matches actual canvas buffers
+    const scaleX = cropperCanvas.width / rect.width;
+    const scaleY = cropperCanvas.height / rect.height;
+    
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
+    };
+  }
+
+  // Cropper Event Listeners
+  cropperCanvasContainer.addEventListener('mousedown', startCropSelection);
+  cropperCanvasContainer.addEventListener('touchstart', startCropSelection);
+
+  function startCropSelection(e) {
+    if (e.type === 'touchstart') e.preventDefault(); // Prevent scrolling on touch drag
+    const pos = getMousePos(e);
+    cropStart = pos;
+    cropEnd = pos;
+    isDrawing = true;
+    cropConfirm.disabled = true;
+  }
+
+  window.addEventListener('mousemove', drawCropSelection);
+  window.addEventListener('touchmove', drawCropSelection);
+
+  function drawCropSelection(e) {
+    if (!isDrawing || !cropStart) return;
+    const pos = getMousePos(e);
+    cropEnd = pos;
+
+    drawCanvasWithMask(cropStart.x, cropStart.y, pos.x, pos.y);
+
+    const w = Math.abs(cropStart.x - pos.x);
+    const h = Math.abs(cropStart.y - pos.y);
+    if (w > 10 && h > 10) {
+      cropConfirm.disabled = false;
+    }
+  }
+
+  window.addEventListener('mouseup', endCropSelection);
+  window.addEventListener('touchend', endCropSelection);
+
+  function endCropSelection() {
+    if (isDrawing) {
+      isDrawing = false;
+    }
+  }
+
+  // Cropper Buttons actions
+  cropCancel.addEventListener('click', () => {
+    // Keep full screenshot, skip cropping
+    const dataUrl = originalCanvas.toDataURL('image/png');
+    currentScreenshot = dataUrl;
+    previewImg.src = dataUrl;
+    
+    captureArea.style.display = 'none';
+    previewArea.style.display = 'block';
+    cropperOverlay.classList.remove('open');
+  });
+
+  cropConfirm.addEventListener('click', () => {
+    if (!cropStart || !cropEnd) return;
+
+    const startX = Math.min(cropStart.x, cropEnd.x);
+    const startY = Math.min(cropStart.y, cropEnd.y);
+    const width = Math.abs(cropStart.x - cropEnd.x);
+    const height = Math.abs(cropStart.y - cropEnd.y);
+
+    if (width < 5 || height < 5) return;
+
+    // Perform native Canvas Slicing
+    const croppedCanvas = document.createElement('canvas');
+    croppedCanvas.width = width;
+    croppedCanvas.height = height;
+
+    const croppedCtx = croppedCanvas.getContext('2d');
+    croppedCtx.drawImage(
+      originalCanvas,
+      startX, startY, width, height, // Source bounds
+      0, 0, width, height            // Destination bounds
+    );
+
+    const dataUrl = croppedCanvas.toDataURL('image/png');
+    currentScreenshot = dataUrl;
+    previewImg.src = dataUrl;
+
+    captureArea.style.display = 'none';
+    previewArea.style.display = 'block';
+    cropperOverlay.classList.remove('open');
+  });
+
+  // Main UI actions
   captureBtn.addEventListener('click', takeScreenshot);
   retakeBtn.addEventListener('click', takeScreenshot);
   
@@ -436,25 +678,33 @@
       let screenshotUrl = '';
 
       if (currentScreenshot) {
-        const uuid = Math.random().toString(36).substring(2, 15);
-        const nameEncoded = encodeURIComponent(`feedback-screenshots/${uuid}.png`);
-        
-        // Convert Base64 Data URL to Blob
-        const resBlob = await fetch(currentScreenshot);
-        const blob = await resBlob.blob();
+        try {
+          const uuid = Math.random().toString(36).substring(2, 15);
+          const nameEncoded = encodeURIComponent(`feedback-screenshots/${uuid}.png`);
+          
+          // Convert Base64 Data URL to Blob
+          const resBlob = await fetch(currentScreenshot);
+          const blob = await resBlob.blob();
 
-        // Upload to Storage using standard public REST API
-        const uploadRes = await fetch(`https://firebasestorage.googleapis.com/v0/b/${storageBucket}/o?uploadType=media&name=${nameEncoded}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'image/png' },
-          body: blob
-        });
+          // Upload to Storage using standard public REST API
+          const uploadRes = await fetch(`https://firebasestorage.googleapis.com/v0/b/${storageBucket}/o?uploadType=media&name=${nameEncoded}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'image/png' },
+            body: blob
+          });
 
-        if (!uploadRes.ok) {
-          throw new Error('Image upload failed');
+          if (uploadRes.ok) {
+            screenshotUrl = `https://firebasestorage.googleapis.com/v0/b/${storageBucket}/o/feedback-screenshots%2F${uuid}.png?alt=media`;
+          } else {
+            console.warn('Storage upload failed with status:', uploadRes.status);
+            errorBox.textContent = 'Warning: Screenshot failed to upload. Submitting written note only.';
+            errorBox.style.display = 'block';
+          }
+        } catch (uploadErr) {
+          console.warn('Image upload failed, falling back to text submission:', uploadErr);
+          errorBox.textContent = 'Warning: Screenshot failed to upload. Submitting written note only.';
+          errorBox.style.display = 'block';
         }
-
-        screenshotUrl = `https://firebasestorage.googleapis.com/v0/b/${storageBucket}/o/feedback-screenshots%2F${uuid}.png?alt=media`;
       }
 
       // Submit feedback to API
