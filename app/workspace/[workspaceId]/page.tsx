@@ -1704,7 +1704,7 @@ export default function WorkspacePage() {
     }
 
     const projectIds = workspace.projectIds || []
-    const targetIds = [workspace.id, ...projectIds].filter(Boolean)
+    const targetIds = [workspace.id, workspace.clientId, ...projectIds].filter(Boolean)
 
     if (targetIds.length === 0) {
       setFeedback([])
