@@ -6,7 +6,6 @@ import { useParams } from "next/navigation"
 import {
   AlertCircle,
   CheckCircle2,
-  Chrome,
   Loader2,
   MessageSquareMore,
   Video,
@@ -19,11 +18,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import FeedbackWidget from "@/components/FeedbackWidget"
 
-type Step = "choose" | "text" | "loom" | "extension" | "done"
-
-const EXTENSION_ID = "your-extension-id-here"
-const EXTENSION_STORE_URL = `https://chrome.google.com/webstore/detail/readyaimgo/${EXTENSION_ID}`
+type Step = "choose" | "widget" | "loom" | "done"
 
 export default function ClientFeedbackPage() {
   const params = useParams()
@@ -38,7 +35,12 @@ export default function ClientFeedbackPage() {
   const [error, setError] = useState("")
   const [interpretation, setInterpretation] = useState<any>(null)
 
-  const submit = async (payload: object) => {
+  const submitLoom = async () => {
+    if (!loomUrl.includes("loom.com")) {
+      setError("Please enter a valid Loom URL")
+      return
+    }
+
     setSubmitting(true)
     setError("")
 
@@ -48,9 +50,10 @@ export default function ClientFeedbackPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectId,
-          clientName: name,
-          clientEmail: email,
-          ...payload,
+          clientName: name || "Anonymous",
+          clientEmail: email || null,
+          loomUrl,
+          rawText: text || undefined,
         }),
       })
 
@@ -78,13 +81,11 @@ export default function ClientFeedbackPage() {
   const stepLabel =
     step === "choose"
       ? "Choose a format"
-      : step === "text"
-        ? "Written feedback"
+      : step === "widget"
+        ? "Written & Screenshot"
         : step === "loom"
           ? "Loom feedback"
-          : step === "extension"
-            ? "Browser extension"
-            : "Submitted"
+          : "Submitted"
 
   if (step === "done") {
     return (
@@ -108,7 +109,7 @@ export default function ClientFeedbackPage() {
                 </p>
               </div>
 
-              {interpretation ? (
+              {interpretation && (
                 <div className="mx-auto max-w-xl rounded-[28px] border border-border/70 bg-muted/35 p-6 text-left">
                   <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">
                     Interpretation
@@ -117,26 +118,15 @@ export default function ClientFeedbackPage() {
                     {interpretation.summary}
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Badge
-                      variant={
-                        interpretation.urgency === "high"
-                          ? "danger"
-                          : interpretation.urgency === "medium"
-                            ? "warning"
-                            : "success"
-                      }
-                    >
-                      {interpretation.urgency} priority
-                    </Badge>
                     <Badge variant="secondary">{interpretation.category}</Badge>
                   </div>
-                  {interpretation.suggestedAction ? (
+                  {interpretation.suggestedAction && (
                     <p className="mt-4 text-sm text-slate-500">
                       Suggested next step: {interpretation.suggestedAction}
                     </p>
-                  ) : null}
+                  )}
                 </div>
-              ) : null}
+              )}
 
               <div className="flex justify-center gap-3">
                 <Button variant="outline" onClick={resetFeedback}>
@@ -175,9 +165,7 @@ export default function ClientFeedbackPage() {
                 Share feedback in the way that feels easiest.
               </h1>
               <p className="max-w-xl text-base leading-8 text-slate-600 sm:text-lg">
-                The redesigned feedback flow uses the same cards, fields, and button language as
-                the rest of the site. That makes the experience feel trustworthy and familiar,
-                whether someone writes a quick note or submits a Loom link.
+                Submit screenshot annotations directly from the page or link a Loom video walkthrough for visual issues.
               </p>
             </div>
 
@@ -185,14 +173,14 @@ export default function ClientFeedbackPage() {
               <CardHeader>
                 <CardTitle>How this is structured</CardTitle>
                 <CardDescription>
-                  One intake form, three submission formats, one consistent visual system.
+                  One intake form, two submission formats, one consistent visual system.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {[
-                  "Choose the fastest format for the feedback.",
-                  "Add optional contact details so the team can follow up.",
-                  "Send the note, video, or extension-based context directly to the project.",
+                  "Choose the fastest format for your feedback.",
+                  "Optionally snapshot your current screen view or link a Loom video.",
+                  "Send the note directly to the engineering dashboard.",
                 ].map((item, index) => (
                   <div
                     key={item}
@@ -209,45 +197,15 @@ export default function ClientFeedbackPage() {
           </section>
 
           <section className="animate-fade-up space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Your details</CardTitle>
-                <CardDescription>
-                  These fields stay visible across every submission method.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-slate-700">Your name</label>
-                  <Input
-                    placeholder="Jane Smith"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-slate-700">
-                    Email (optional)
-                  </label>
-                  <Input
-                    type="email"
-                    placeholder="jane@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            {step === "choose" ? (
+            {step === "choose" && (
               <div className="grid gap-4">
                 {[
                   {
                     icon: MessageSquareMore,
-                    title: "Write a note",
-                    copy: "Best for direct written feedback and quick prioritization.",
+                    title: "Write a note & snapshot view",
+                    copy: "Capture your screen view and describe what needs attention.",
                     accent: "bg-primary/12 text-primary",
-                    nextStep: "text" as Step,
+                    nextStep: "widget" as Step,
                   },
                   {
                     icon: Video,
@@ -255,13 +213,6 @@ export default function ClientFeedbackPage() {
                     copy: "Best for showing context, walkthroughs, and visual issues.",
                     accent: "bg-sky-100 text-sky-700",
                     nextStep: "loom" as Step,
-                  },
-                  {
-                    icon: Chrome,
-                    title: "Use the browser extension",
-                    copy: "Best for annotating live pages directly in context.",
-                    accent: "bg-violet-100 text-violet-700",
-                    nextStep: "extension" as Step,
                   },
                 ].map((item) => (
                   <Card
@@ -283,56 +234,33 @@ export default function ClientFeedbackPage() {
                   </Card>
                 ))}
               </div>
-            ) : null}
+            )}
 
-            {step === "text" ? (
+            {step === "widget" && (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-3">
                     <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/12 text-primary">
                       <MessageSquareMore className="h-5 w-5" />
                     </span>
-                    Written feedback
+                    In-Page Feedback & Capture
                   </CardTitle>
                   <CardDescription>
-                    Describe the issue, request, or observation in your own words.
+                    Describe your observation and snapshot the current viewport.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <Textarea
-                    placeholder="Example: The contact form on the homepage does not submit on mobile, and the hero copy feels too tight on smaller screens."
-                    value={text}
-                    onChange={(e) => setText(e.target.value)}
-                  />
-                  {error ? (
-                    <div className="flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                      <AlertCircle className="h-4 w-4" />
-                      <span>{error}</span>
-                    </div>
-                  ) : null}
-                  <div className="flex flex-wrap gap-3">
+                  <FeedbackWidget projectId={projectId} floating={false} />
+                  <div className="flex justify-start">
                     <Button variant="outline" onClick={() => setStep("choose")}>
-                      Back
-                    </Button>
-                    <Button
-                      onClick={() => submit({ rawText: text })}
-                      disabled={!text.trim() || submitting}
-                    >
-                      {submitting ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Sending...
-                        </>
-                      ) : (
-                        "Send Feedback"
-                      )}
+                      Back to Choose
                     </Button>
                   </div>
                 </CardContent>
               </Card>
-            ) : null}
+            )}
 
-            {step === "loom" ? (
+            {step === "loom" && (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-3">
@@ -346,47 +274,57 @@ export default function ClientFeedbackPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-semibold text-slate-700">Loom URL</label>
-                    <Input
-                      placeholder="https://www.loom.com/share/..."
-                      value={loomUrl}
-                      onChange={(e) => setLoomUrl(e.target.value)}
-                    />
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-700">Your name</label>
+                      <Input
+                        placeholder="Jane Smith"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-700">Email (optional)</label>
+                      <Input
+                        type="email"
+                        placeholder="jane@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-700">Loom URL</label>
+                      <Input
+                        placeholder="https://www.loom.com/share/..."
+                        value={loomUrl}
+                        onChange={(e) => setLoomUrl(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-slate-700">
+                        Description (optional)
+                      </label>
+                      <Textarea
+                        className="min-h-[100px]"
+                        placeholder="What should the team focus on in the video?"
+                        value={text}
+                        onChange={(e) => setText(e.target.value)}
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-semibold text-slate-700">
-                      Brief description (optional)
-                    </label>
-                    <Textarea
-                      className="min-h-[120px]"
-                      placeholder="What should the team focus on in the video?"
-                      value={text}
-                      onChange={(e) => setText(e.target.value)}
-                    />
-                  </div>
-                  <p className="text-sm text-slate-500">
-                    Need Loom first?{" "}
-                    <a
-                      href="https://loom.com"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-semibold text-primary hover:opacity-80"
-                    >
-                      Open loom.com
-                    </a>
-                  </p>
-                  {error ? (
+
+                  {error && (
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                       {error}
                     </div>
-                  ) : null}
+                  )}
+
                   <div className="flex flex-wrap gap-3">
                     <Button variant="outline" onClick={() => setStep("choose")}>
                       Back
                     </Button>
                     <Button
-                      onClick={() => submit({ loomUrl, rawText: text || undefined })}
+                      onClick={submitLoom}
                       disabled={!loomUrl.includes("loom.com") || submitting}
                     >
                       {submitting ? (
@@ -401,61 +339,7 @@ export default function ClientFeedbackPage() {
                   </div>
                 </CardContent>
               </Card>
-            ) : null}
-
-            {step === "extension" ? (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-3">
-                    <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-100 text-violet-700">
-                      <Chrome className="h-5 w-5" />
-                    </span>
-                    Browser extension
-                  </CardTitle>
-                  <CardDescription>
-                    Install the extension to leave annotated feedback directly on the live site.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                  <div className="rounded-[24px] border border-border/70 bg-muted/35 p-5">
-                    <p className="text-sm leading-7 text-slate-600">
-                      This path is ideal when the issue depends on page context or a specific UI
-                      element. Install once, then annotate directly in the browser.
-                    </p>
-                  </div>
-
-                  <div className="grid gap-3">
-                    {[
-                      "Install the Readyaimgo Chrome extension.",
-                      "Open the live page and launch the extension.",
-                      "Click the area you want to annotate and leave your note in context.",
-                    ].map((item, index) => (
-                      <div
-                        key={item}
-                        className="flex items-center gap-3 rounded-2xl border border-border/70 bg-white/80 px-4 py-3 text-sm text-slate-700"
-                      >
-                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-100 font-semibold text-violet-700">
-                          {index + 1}
-                        </span>
-                        <span>{item}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="flex flex-wrap gap-3">
-                    <Button asChild>
-                      <a href={EXTENSION_STORE_URL} target="_blank" rel="noopener noreferrer">
-                        <Chrome className="mr-2 h-4 w-4" />
-                        Add to Chrome
-                      </a>
-                    </Button>
-                    <Button variant="outline" onClick={() => setStep("choose")}>
-                      Back
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ) : null}
+            )}
           </section>
         </div>
       </div>

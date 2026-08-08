@@ -38,6 +38,7 @@ export async function POST(request: NextRequest) {
       loomUrl,
       pageUrl,
       elementSelector,
+      screenshotUrl,
     } = body
     const feedbackText =
       typeof rawText === "string" && rawText.trim()
@@ -117,11 +118,12 @@ export async function POST(request: NextRequest) {
       loomUrl: loomUrl || null,
       pageUrl: pageUrl || null,
       elementSelector: elementSelector || null,
+      screenshotUrl: screenshotUrl || null,
       ...aiInterpretation,
       status: "open",
       resolvedAt: null,
       resolvedNote: null,
-      source: loomUrl && !rawText ? "loom" : pageUrl ? "extension" : "portal",
+      source: loomUrl && !rawText ? "loom" : screenshotUrl ? "widget" : pageUrl ? "extension" : "portal",
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     })
