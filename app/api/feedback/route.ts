@@ -4,14 +4,17 @@ import { getAdminDb } from "@/lib/firebase-admin"
 
 const ALLOWED_ORIGINS = [
   "https://together-for-homes-permit-dashboard.vercel.app",
-  "http://localhost:3000",
-  "http://localhost:3001",
-  "http://localhost:3002",
+  "https://mkeblack.org",
+  "https://www.mkeblack.org",
 ]
 
 function getCorsHeaders(request: NextRequest) {
   const origin = request.headers.get("origin") || ""
-  const isAllowed = ALLOWED_ORIGINS.includes(origin)
+  const isAllowed = 
+    ALLOWED_ORIGINS.includes(origin) ||
+    origin.startsWith("http://localhost:") ||
+    origin.endsWith(".vercel.app") ||
+    origin.endsWith(".readyaimgo.biz")
   
   return {
     "Access-Control-Allow-Origin": isAllowed ? origin : ALLOWED_ORIGINS[0],
