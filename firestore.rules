@@ -172,6 +172,11 @@ service cloud.firestore {
       allow read: if signedIn();
     }
 
+    match /clientFeedback/{feedbackId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
