@@ -1,7 +1,29 @@
 import { NextRequest, NextResponse } from "next/server"
 import { FieldValue, type Query, type QueryDocumentSnapshot } from "firebase-admin/firestore"
-
 import { getAdminDb } from "@/lib/firebase-admin"
+
+const ALLOWED_ORIGINS = [
+  "https://together-for-homes-permit-dashboard.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:3002",
+]
+
+function getCorsHeaders(request: NextRequest) {
+  const origin = request.headers.get("origin") || ""
+  const isAllowed = ALLOWED_ORIGINS.includes(origin)
+  
+  return {
+    "Access-Control-Allow-Origin": isAllowed ? origin : ALLOWED_ORIGINS[0],
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS, PATCH",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Credentials": "true",
+  }
+}
+
+export async function OPTIONS(request: NextRequest) {
+  return NextResponse.json({}, { headers: getCorsHeaders(request) })
+}
 
 function feedbackTimestampMillis(value: any) {
   const date = value?.toDate?.()
@@ -54,7 +76,10 @@ export async function POST(request: NextRequest) {
         : "medium"
 
     if (!projectId || (!feedbackText && !loomUrl)) {
-      return NextResponse.json({ error: "projectId and either summary/rawText or loomUrl required" }, { status: 400 })
+      return NextResponse.json(
+        { error: "projectId and either summary/rawText or loomUrl required" },
+        { status: 400, headers: getCorsHeaders(request) }
+      )
     }
 
     let aiInterpretation = {
@@ -135,9 +160,12 @@ export async function POST(request: NextRequest) {
       )
     } catch {}
 
-    return NextResponse.json({ success: true, feedbackId: ref.id, interpretation: aiInterpretation })
+    return NextResponse.json(
+      { success: true, feedbackId: ref.id, interpretation: aiInterpretation },
+      { headers: getCorsHeaders(request) }
+    )
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: error.message }, { status: 500, headers: getCorsHeaders(request) })
   }
 }
 
