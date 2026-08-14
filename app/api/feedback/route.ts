@@ -6,6 +6,8 @@ const ALLOWED_ORIGINS = [
   "https://together-for-homes-permit-dashboard.vercel.app",
   "https://mkeblack.org",
   "https://www.mkeblack.org",
+  "https://paynepros.com",
+  "https://www.paynepros.com",
 ]
 
 function getCorsHeaders(request: NextRequest) {
@@ -56,12 +58,18 @@ export async function POST(request: NextRequest) {
       projectId,
       clientEmail,
       clientName,
+      userRole,
       rawText,
       summary,
       category,
       urgency,
       loomUrl,
       pageUrl,
+      routePath,
+      viewport,
+      deviceType,
+      userAgent,
+      consoleErrors,
       elementSelector,
       screenshotUrl,
     } = body
@@ -94,8 +102,14 @@ export async function POST(request: NextRequest) {
       pulseScore: 5,
     }
 
-    if (feedbackText && process.env.OPENAI_API_KEY && !category && !urgency) {
+    if (feedbackText && process.env.OPENAI_API_KEY) {
       try {
+        const errorContext = Array.isArray(consoleErrors) && consoleErrors.length > 0
+          ? `\nConsole Errors:\n${consoleErrors.map((e: any) => `- ${e.message} (${e.source}:${e.line})`).join("\n")}`
+          : ""
+        const elementContext = elementSelector ? `\nTarget Element: ${elementSelector}` : ""
+        const routeContext = routePath ? `\nRoute Path: ${routePath}` : ""
+
         const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: {
@@ -113,12 +127,12 @@ export async function POST(request: NextRequest) {
 - category: "bug" | "design" | "content" | "feature" | "performance" | "question" | "approval" | "general"
 - urgency: "low" | "medium" | "high"
 - actionable: boolean
-- suggestedAction: brief next step or empty string
+- suggestedAction: brief next step or code fix location hint
 - pulseScore: 1-10 priority impact (10=broken, 1=minor)`,
               },
               {
                 role: "user",
-                content: `Client feedback: "${feedbackText}"${pageUrl ? `\nPage: ${pageUrl}` : ""}`,
+                content: `Client feedback: "${feedbackText}"${pageUrl ? `\nPage: ${pageUrl}` : ""}${routeContext}${elementContext}${errorContext}`,
               },
             ],
           }),
@@ -142,9 +156,15 @@ export async function POST(request: NextRequest) {
       projectId,
       clientEmail: clientEmail || null,
       clientName: clientName || "Anonymous",
+      userRole: userRole || null,
       rawText: feedbackText || null,
       loomUrl: loomUrl || null,
       pageUrl: pageUrl || null,
+      routePath: routePath || null,
+      viewport: viewport || null,
+      deviceType: deviceType || null,
+      userAgent: userAgent || null,
+      consoleErrors: consoleErrors || null,
       elementSelector: elementSelector || null,
       screenshotUrl: screenshotUrl || null,
       ...aiInterpretation,

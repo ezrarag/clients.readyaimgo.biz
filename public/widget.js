@@ -16,6 +16,27 @@
   const apiBaseUrl = scriptTag ? scriptTag.getAttribute('data-api-url') : 'https://clients.readyaimgo.biz';
   const storageBucket = 'readyaimgo-ab187.firebasestorage.app';
 
+  // Console Error Tracking Buffer
+  const consoleErrorBuffer = [];
+  const MAX_ERRORS = 10;
+  window.addEventListener('error', function (event) {
+    consoleErrorBuffer.push({
+      message: event.message || String(event),
+      source: event.filename || '',
+      line: event.lineno || 0,
+      col: event.colno || 0,
+      timestamp: new Date().toISOString(),
+    });
+    if (consoleErrorBuffer.length > MAX_ERRORS) consoleErrorBuffer.shift();
+  });
+  window.addEventListener('unhandledrejection', function (event) {
+    consoleErrorBuffer.push({
+      message: 'Unhandled Rejection: ' + (event.reason?.message || event.reason || 'Unknown error'),
+      timestamp: new Date().toISOString(),
+    });
+    if (consoleErrorBuffer.length > MAX_ERRORS) consoleErrorBuffer.shift();
+  });
+
   // Play synthesised audio chime to confirm feedback submission
   function playChime() {
     try {
@@ -270,6 +291,54 @@
       background: #fef3c7;
       color: #92400e;
     }
+    .rag-widget-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 4px;
+    }
+    .rag-pill {
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #cbd5e0;
+      border-radius: 9999px;
+      padding: 3px 9px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .rag-pill:hover {
+      background: #e2e8f0;
+      color: #1e293b;
+    }
+    .rag-pill.active {
+      background: #4f46e5;
+      color: #ffffff;
+      border-color: #4f46e5;
+    }
+    .rag-element-badge {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1e40af;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-family: monospace;
+      margin-top: 6px;
+    }
+    .rag-element-clear {
+      background: none;
+      border: none;
+      color: #3b82f6;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 0 2px;
+    }
 
     /* Cropper Overlay styles */
     .rag-cropper-overlay {
@@ -354,6 +423,16 @@
       <div id="rag-error-box" class="rag-widget-error" style="display: none;"></div>
       <div id="rag-form-body">
         <div class="rag-widget-group">
+          <label class="rag-widget-label">Category</label>
+          <div class="rag-widget-pills" id="rag-pills">
+            <button type="button" class="rag-pill active" data-category="bug">🐛 Bug</button>
+            <button type="button" class="rag-pill" data-category="design">🎨 Design</button>
+            <button type="button" class="rag-pill" data-category="content">📝 Content</button>
+            <button type="button" class="rag-pill" data-category="feature">✨ Feature</button>
+            <button type="button" class="rag-pill" data-category="question">❓ Question</button>
+          </div>
+        </div>
+        <div class="rag-widget-group">
           <label class="rag-widget-label">Name</label>
           <input type="text" id="rag-name" placeholder="Jane Smith" class="rag-widget-input" />
         </div>
@@ -364,12 +443,22 @@
         <div class="rag-widget-group">
           <label class="rag-widget-label">Feedback</label>
           <textarea id="rag-text" placeholder="Describe the issue or observation..." class="rag-widget-textarea"></textarea>
+          <div id="rag-element-indicator" class="rag-element-badge" style="display: none;">
+            <span id="rag-element-text" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Target: </span>
+            <button type="button" id="rag-element-clear" class="rag-element-clear" title="Remove target">&times;</button>
+          </div>
         </div>
         <div class="rag-widget-group" id="rag-capture-area">
-          <button type="button" class="rag-widget-capture-btn" id="rag-capture-btn">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-camera"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
-            Snapshot Current View
-          </button>
+          <div style="display: flex; gap: 8px;">
+            <button type="button" class="rag-widget-capture-btn" id="rag-capture-btn" style="flex: 1;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-camera"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+              Snapshot
+            </button>
+            <button type="button" class="rag-widget-capture-btn" id="rag-inspect-btn" style="flex: 1; background: #eff6ff; color: #2563eb; border-color: #bfdbfe;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="m13 13 6 6"/></svg>
+              Point Element
+            </button>
+          </div>
         </div>
         <div class="rag-widget-group" id="rag-preview-area" style="display: none;">
           <div class="rag-widget-thumbnail-container">
@@ -460,6 +549,110 @@
 
   let currentScreenshot = null; // Base64 PNG dataUrl
   let isCapturing = false;
+
+  let selectedCategory = 'bug';
+  let selectedElementSelector = null;
+  let isInspecting = false;
+  let inspectorOutline = null;
+
+  // Category Pills listener
+  const pillsContainer = document.getElementById('rag-pills');
+  if (pillsContainer) {
+    const pillButtons = pillsContainer.querySelectorAll('.rag-pill');
+    pillButtons.forEach((pill) => {
+      pill.addEventListener('click', () => {
+        pillButtons.forEach((p) => p.classList.remove('active'));
+        pill.classList.add('active');
+        selectedCategory = pill.getAttribute('data-category') || 'bug';
+      });
+    });
+  }
+
+  // User Context Pre-fill
+  function applyUserContext() {
+    const user = window.RAG_USER || window.RAG_FEEDBACK_USER || {};
+    const nameAttr = scriptTag ? scriptTag.getAttribute('data-user-name') : null;
+    const emailAttr = scriptTag ? scriptTag.getAttribute('data-user-email') : null;
+    if ((user.name || nameAttr) && nameInput && !nameInput.value) {
+      nameInput.value = user.name || nameAttr;
+    }
+    if ((user.email || emailAttr) && emailInput && !emailInput.value) {
+      emailInput.value = user.email || emailAttr;
+    }
+  }
+  applyUserContext();
+
+  // Inspect Element Mode
+  const inspectBtn = document.getElementById('rag-inspect-btn');
+  const elementIndicator = document.getElementById('rag-element-indicator');
+  const elementText = document.getElementById('rag-element-text');
+  const elementClear = document.getElementById('rag-element-clear');
+
+  function startInspector() {
+    modal.classList.remove('open');
+    container.style.visibility = 'hidden';
+    isInspecting = true;
+
+    if (!inspectorOutline) {
+      inspectorOutline = document.createElement('div');
+      inspectorOutline.style.cssText =
+        'position:fixed;pointer-events:none;z-index:2147483646;border:2px dashed #4f46e5;background:rgba(79,70,229,0.08);border-radius:4px;transition:all 0.05s ease;display:none;';
+      document.body.appendChild(inspectorOutline);
+    }
+
+    function onInspectorHover(e) {
+      if (!isInspecting) return;
+      const target = e.target;
+      if (!target || target.closest('.rag-widget-container')) return;
+      const rect = target.getBoundingClientRect();
+      inspectorOutline.style.left = rect.left + 'px';
+      inspectorOutline.style.top = rect.top + 'px';
+      inspectorOutline.style.width = rect.width + 'px';
+      inspectorOutline.style.height = rect.height + 'px';
+      inspectorOutline.style.display = 'block';
+    }
+
+    function onInspectorClick(e) {
+      if (!isInspecting) return;
+      const target = e.target;
+      if (!target || target.closest('.rag-widget-container')) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      isInspecting = false;
+      inspectorOutline.style.display = 'none';
+      window.removeEventListener('mousemove', onInspectorHover, true);
+      window.removeEventListener('click', onInspectorClick, true);
+
+      const tag = target.tagName.toLowerCase();
+      const id = target.id ? '#' + target.id : '';
+      const cls =
+        target.className && typeof target.className === 'string'
+          ? '.' + target.className.trim().split(/\s+/).slice(0, 2).join('.')
+          : '';
+      const textSnippet = (target.innerText || target.value || '').trim().substring(0, 30);
+      selectedElementSelector = `${tag}${id}${cls}${textSnippet ? ` ["${textSnippet}"]` : ''}`;
+
+      if (elementText && elementIndicator) {
+        elementText.textContent = 'Target: ' + selectedElementSelector;
+        elementIndicator.style.display = 'flex';
+      }
+
+      container.style.visibility = 'visible';
+      modal.classList.add('open');
+    }
+
+    window.addEventListener('mousemove', onInspectorHover, true);
+    window.addEventListener('click', onInspectorClick, true);
+  }
+
+  if (inspectBtn) inspectBtn.addEventListener('click', startInspector);
+  if (elementClear) {
+    elementClear.addEventListener('click', () => {
+      selectedElementSelector = null;
+      if (elementIndicator) elementIndicator.style.display = 'none';
+    });
+  }
 
   // Cropper logic variables
   let originalCanvas = null;
@@ -739,6 +932,10 @@
         }
       }
 
+      // User Role & Context resolution
+      const user = window.RAG_USER || window.RAG_FEEDBACK_USER || {};
+      const userRole = user.role || (scriptTag ? scriptTag.getAttribute('data-user-role') : null) || null;
+
       // Submit feedback to API
       const apiRes = await fetch(`${apiBaseUrl}/api/feedback`, {
         method: 'POST',
@@ -747,10 +944,28 @@
           projectId,
           clientName: nameInput.value.trim() || 'Anonymous',
           clientEmail: emailInput.value.trim() || null,
+          userRole,
+          category: selectedCategory,
           rawText: textVal,
           screenshotUrl: screenshotUrl || null,
           pageUrl: window.location.href,
-        })
+          routePath: window.location.pathname,
+          viewport: {
+            width: window.innerWidth,
+            height: window.innerHeight,
+            screenW: window.screen ? window.screen.width : null,
+            screenH: window.screen ? window.screen.height : null,
+            pixelRatio: window.devicePixelRatio || 1,
+          },
+          deviceType: /Mobi|Android/i.test(navigator.userAgent)
+            ? 'mobile'
+            : /Tablet|iPad/i.test(navigator.userAgent)
+            ? 'tablet'
+            : 'desktop',
+          userAgent: navigator.userAgent,
+          consoleErrors: consoleErrorBuffer.length > 0 ? consoleErrorBuffer : null,
+          elementSelector: selectedElementSelector || null,
+        }),
       });
 
       const data = await apiRes.json();
