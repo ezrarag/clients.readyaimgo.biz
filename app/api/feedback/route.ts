@@ -8,6 +8,10 @@ const ALLOWED_ORIGINS = [
   "https://www.mkeblack.org",
   "https://paynepros.com",
   "https://www.paynepros.com",
+  "https://mariaclarkesoprano.com",
+  "https://www.mariaclarkesoprano.com",
+  "https://mariaclark.vercel.app",
+  "https://mariaclarke.vercel.app",
 ]
 
 function getCorsHeaders(request: NextRequest) {
