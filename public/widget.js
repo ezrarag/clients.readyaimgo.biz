@@ -432,11 +432,15 @@
             <button type="button" class="rag-pill" data-category="question">❓ Question</button>
           </div>
         </div>
-        <div class="rag-widget-group">
+        <div id="rag-user-banner" style="display: none; background: #f8fafc; border: 1px solid #e2e8f0; padding: 6px 10px; border-radius: 8px; font-size: 11px; color: #334155; margin-bottom: 10px; align-items: center; justify-content: space-between;">
+          <span id="rag-user-info">Posting as: <strong id="rag-user-name-text">User</strong></span>
+          <span style="font-size: 10px; background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-weight: 600;">Verified</span>
+        </div>
+        <div id="rag-name-group" class="rag-widget-group">
           <label class="rag-widget-label">Name</label>
           <input type="text" id="rag-name" placeholder="Jane Smith" class="rag-widget-input" />
         </div>
-        <div class="rag-widget-group">
+        <div id="rag-email-group" class="rag-widget-group">
           <label class="rag-widget-label">Email</label>
           <input type="email" id="rag-email" placeholder="jane@example.com" class="rag-widget-input" />
         </div>
@@ -568,16 +572,36 @@
     });
   }
 
-  // User Context Pre-fill
+  // User Context Pre-fill & Identity Auto-Lock
   function applyUserContext() {
     const user = window.RAG_USER || window.RAG_FEEDBACK_USER || {};
     const nameAttr = scriptTag ? scriptTag.getAttribute('data-user-name') : null;
     const emailAttr = scriptTag ? scriptTag.getAttribute('data-user-email') : null;
-    if ((user.name || nameAttr) && nameInput && !nameInput.value) {
-      nameInput.value = user.name || nameAttr;
-    }
-    if ((user.email || emailAttr) && emailInput && !emailInput.value) {
-      emailInput.value = user.email || emailAttr;
+
+    const resolvedName = user.name || nameAttr || '';
+    const resolvedEmail = user.email || emailAttr || '';
+
+    if (nameInput && resolvedName) nameInput.value = resolvedName;
+    if (emailInput && resolvedEmail) emailInput.value = resolvedEmail;
+
+    const userBanner = document.getElementById('rag-user-banner');
+    const userNameText = document.getElementById('rag-user-name-text');
+    const nameGroup = document.getElementById('rag-name-group');
+    const emailGroup = document.getElementById('rag-email-group');
+
+    if (resolvedName || resolvedEmail) {
+      if (userNameText) {
+        userNameText.textContent = resolvedName
+          ? `${resolvedName}${resolvedEmail ? ` (${resolvedEmail})` : ''}`
+          : resolvedEmail;
+      }
+      if (userBanner) userBanner.style.display = 'flex';
+      if (nameGroup) nameGroup.style.display = 'none';
+      if (emailGroup) emailGroup.style.display = 'none';
+    } else {
+      if (userBanner) userBanner.style.display = 'none';
+      if (nameGroup) nameGroup.style.display = 'block';
+      if (emailGroup) emailGroup.style.display = 'block';
     }
   }
   applyUserContext();
