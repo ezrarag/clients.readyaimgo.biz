@@ -25,13 +25,18 @@ initializeApp({
 const db = getFirestore();
 
 async function main() {
-  console.log("=== WORKSPACE INFO ===");
-  const wsDoc = await db.collection("workspaces").doc("Wwy2KrS5g3D47REVczlm").get();
-  if (wsDoc.exists) {
-    console.log("Workspace Wwy2KrS5g3D47REVczlm exists!");
-    console.log(JSON.stringify(wsDoc.data(), null, 2));
-  } else {
-    console.log("Workspace Wwy2KrS5g3D47REVczlm does NOT exist");
+  const docsToUpdate = ["XaAngtg19mk3sdRnc7Bi", "mWP1rgpgb7fPEj97RmPw"];
+  console.log("=== MIGRATING RECENT MKEBLACK FEEDBACKS ===");
+  
+  for (const id of docsToUpdate) {
+    const docRef = db.collection("clientFeedback").doc(id);
+    const snap = await docRef.get();
+    if (snap.exists) {
+      await docRef.update({ projectId: "SUwqw3jWvGC1aImcJZsh" });
+      console.log(`Updated feedback document ${id} projectId to SUwqw3jWvGC1aImcJZsh`);
+    } else {
+      console.log(`Document ${id} not found`);
+    }
   }
 }
 

@@ -48,6 +48,7 @@ const TYPE_LABELS: Record<ContractType, string> = {
   anchor_partner: "Anchor Partner",
   cohort_services: "Cohort Services",
   mou: "MOU",
+  client_project: "Client Project",
 }
 
 const NGO_LABELS: Record<string, string> = {

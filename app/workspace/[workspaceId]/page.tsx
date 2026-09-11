@@ -8,6 +8,9 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  Search,
+  Building,
   CreditCard,
   Download,
   Globe2,
@@ -1186,6 +1189,10 @@ export default function WorkspacePage() {
   const [questionnairesLoading, setQuestionnairesLoading] = useState(true)
   const [workspaceUpdates, setWorkspaceUpdates] = useState<WorkspaceUpdate[]>([])
   const [updatesLoading, setUpdatesLoading] = useState(true)
+  const [allWorkspaces, setAllWorkspaces] = useState<Workspace[]>([])
+  const [switcherOpen, setSwitcherOpen] = useState(false)
+  const [switcherSearch, setSwitcherSearch] = useState("")
+  const [loadingProgress, setLoadingProgress] = useState(0)
   const [statusVideos, setStatusVideos] = useState<ClientStatusVideo[]>([])
   const [statusVideosLoading, setStatusVideosLoading] = useState(true)
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
@@ -1446,11 +1453,31 @@ export default function WorkspacePage() {
     if (!user) return
     setLoading(true)
     setError(null)
+    
+    let completed = 0
+    const total = 12
+    setLoadingProgress(0)
+
+    const track = async <T,>(promise: Promise<T>): Promise<T> => {
+      try {
+        const res = await promise
+        completed++
+        setLoadingProgress(Math.round((completed / total) * 100))
+        return res
+      } catch (err) {
+        completed++
+        setLoadingProgress(Math.round((completed / total) * 100))
+        throw err
+      }
+    }
+
     try {
-      const workspaceRes = await apiFetch<{
-        workspace: Workspace
-        relationshipProfile: WorkspaceRelationshipProfile | null
-      }>(user, `/api/workspaces/${encodeURIComponent(params.workspaceId)}`)
+      const workspaceRes = await track(
+        apiFetch<{
+          workspace: Workspace
+          relationshipProfile: WorkspaceRelationshipProfile | null
+        }>(user, `/api/workspaces/${encodeURIComponent(params.workspaceId)}`)
+      )
 
       const ws = workspaceRes.workspace
       if (!ws?.id) {
@@ -1458,72 +1485,107 @@ export default function WorkspacePage() {
         return
       }
 
-      const [membersRes, projectsRes, reposRes, vercelRes, contractsRes, filesRes, paymentsRes, expensesRes, commsRes, linksRes] = await Promise.all([
-        apiFetch<{ members: WorkspaceMember[] }>(
-          user,
-          `/api/workspaces/${params.workspaceId}/members`
+      const [
+        membersRes,
+        projectsRes,
+        reposRes,
+        vercelRes,
+        contractsRes,
+        filesRes,
+        paymentsRes,
+        expensesRes,
+        commsRes,
+        linksRes,
+        workspacesRes,
+      ] = await Promise.all([
+        track(
+          apiFetch<{ members: WorkspaceMember[] }>(
+            user,
+            `/api/workspaces/${params.workspaceId}/members`
+          )
         ),
-        apiFetch<{ projects: WorkspaceProject[] }>(
-          user,
-          `/api/workspaces/${params.workspaceId}/projects`
-        ).catch(() => ({ projects: [] as WorkspaceProject[] })),
-        apiFetch<GitHubReposResponse>(
-          user,
-          `/api/github/repos?workspaceId=${encodeURIComponent(params.workspaceId)}`
-        ).catch((err) => ({
-          repos: [] as GitHubRepo[],
-          meta: {
-            configured: false,
-            warning: err instanceof Error ? err.message : "Unable to load GitHub repos.",
-          },
-        })),
-        apiFetch<VercelProjectsResponse>(
-          user,
-          `/api/vercel/projects?workspaceId=${encodeURIComponent(params.workspaceId)}`
-        ).catch((err) => ({
-          projects: [] as VercelProject[],
-          meta: {
-            configured: false,
-            warning: err instanceof Error ? err.message : "Unable to load Vercel projects.",
-          },
-        })),
-        // Contracts — soft fail if workspace has no linked clientId yet
-        apiFetch<{ contracts: BeamContract[] }>(
-          user,
-          `/api/contracts?workspaceId=${params.workspaceId}`
-        ).catch(() => ({ contracts: [] as BeamContract[] })),
-        // Files — always soft fail; empty list is valid
-        apiFetch<{ files: WorkspaceFile[] }>(
-          user,
-          `/api/workspaces/${params.workspaceId}/files`
-        ).catch(() => ({ files: [] as WorkspaceFile[] })),
-        // Payments — soft fail; empty state shown when no clientId linked
-        apiFetch<WorkspacePaymentData>(
-          user,
-          `/api/workspaces/${params.workspaceId}/payments`
-        ).catch(() => ({
-          clientId: null,
-          stripeCustomerId: null,
-          totalPaid: 0,
-          retainerBalance: 0,
-          ledger: [] as WorkspaceLedgerEntry[],
-          payments: [] as ValuePaymentRecord[],
-          deliverables: [] as ClientDeliverable[],
-          invoices: [] as ClientInvoice[],
-          accountOwner: null,
-        })),
-        apiFetch<{ expenses: WorkspaceExpense[] }>(
-          user,
-          `/api/workspaces/${params.workspaceId}/expenses`
-        ).catch(() => ({ expenses: [] as WorkspaceExpense[] })),
-        apiFetch<CorrespondenceResponse>(
-          user,
-          `/api/workspaces/${params.workspaceId}/correspondence`
-        ).catch((): CorrespondenceResponse => ({ items: [], locked: true })),
-        apiFetch<{ links: InfrastructureLink[] }>(
-          user,
-          `/api/workspaces/${params.workspaceId}/infrastructure-links`
-        ).catch(() => ({ links: [] as InfrastructureLink[] })),
+        track(
+          apiFetch<{ projects: WorkspaceProject[] }>(
+            user,
+            `/api/workspaces/${params.workspaceId}/projects`
+          ).catch(() => ({ projects: [] as WorkspaceProject[] }))
+        ),
+        track(
+          apiFetch<GitHubReposResponse>(
+            user,
+            `/api/github/repos?workspaceId=${encodeURIComponent(params.workspaceId)}`
+          ).catch((err) => ({
+            repos: [] as GitHubRepo[],
+            meta: {
+              configured: false,
+              warning: err instanceof Error ? err.message : "Unable to load GitHub repos.",
+            },
+          }))
+        ),
+        track(
+          apiFetch<VercelProjectsResponse>(
+            user,
+            `/api/vercel/projects?workspaceId=${encodeURIComponent(params.workspaceId)}`
+          ).catch((err) => ({
+            projects: [] as VercelProject[],
+            meta: {
+              configured: false,
+              warning: err instanceof Error ? err.message : "Unable to load Vercel projects.",
+            },
+          }))
+        ),
+        track(
+          apiFetch<{ contracts: BeamContract[] }>(
+            user,
+            `/api/contracts?workspaceId=${params.workspaceId}`
+          ).catch(() => ({ contracts: [] as BeamContract[] }))
+        ),
+        track(
+          apiFetch<{ files: WorkspaceFile[] }>(
+            user,
+            `/api/workspaces/${params.workspaceId}/files`
+          ).catch(() => ({ files: [] as WorkspaceFile[] }))
+        ),
+        track(
+          apiFetch<WorkspacePaymentData>(
+            user,
+            `/api/workspaces/${params.workspaceId}/payments`
+          ).catch(() => ({
+            clientId: null,
+            stripeCustomerId: null,
+            totalPaid: 0,
+            retainerBalance: 0,
+            ledger: [] as WorkspaceLedgerEntry[],
+            payments: [] as ValuePaymentRecord[],
+            deliverables: [] as ClientDeliverable[],
+            invoices: [] as ClientInvoice[],
+            accountOwner: null,
+          }))
+        ),
+        track(
+          apiFetch<{ expenses: WorkspaceExpense[] }>(
+            user,
+            `/api/workspaces/${params.workspaceId}/expenses`
+          ).catch(() => ({ expenses: [] as WorkspaceExpense[] }))
+        ),
+        track(
+          apiFetch<CorrespondenceResponse>(
+            user,
+            `/api/workspaces/${params.workspaceId}/correspondence`
+          ).catch((): CorrespondenceResponse => ({ items: [], locked: true }))
+        ),
+        track(
+          apiFetch<{ links: InfrastructureLink[] }>(
+            user,
+            `/api/workspaces/${params.workspaceId}/infrastructure-links`
+          ).catch(() => ({ links: [] as InfrastructureLink[] }))
+        ),
+        track(
+          apiFetch<{ workspaces: Workspace[] }>(
+            user,
+            "/api/workspaces"
+          ).catch(() => ({ workspaces: [] as Workspace[] }))
+        ),
       ])
 
       setWorkspace(ws)
@@ -1542,6 +1604,7 @@ export default function WorkspacePage() {
       setCorrespondenceLocked(Boolean(commsRes.locked))
       setMeetingProviders(commsRes.meetingProviders ?? [])
       setInfrastructureLinks(linksRes.links)
+      setAllWorkspaces(workspacesRes.workspaces)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load workspace.")
     } finally {
@@ -1558,6 +1621,18 @@ export default function WorkspacePage() {
       void load()
     }
   }, [authLoading, load, router, user])
+
+  useEffect(() => {
+    if (!switcherOpen) return
+    const handleClick = (e: MouseEvent) => {
+      const switcherEl = document.getElementById("workspace-switcher")
+      if (switcherEl && !switcherEl.contains(e.target as Node)) {
+        setSwitcherOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClick)
+    return () => document.removeEventListener("mousedown", handleClick)
+  }, [switcherOpen])
 
   useEffect(() => {
     if (!user) {
@@ -2605,6 +2680,77 @@ export default function WorkspacePage() {
     }
   }
 
+  const [newTechItem, setNewTechItem] = useState("")
+  const [newTechCategory, setNewTechCategory] = useState<"current" | "expected" | "upcoming">("current")
+
+  const handleUpdateComplianceStatus = async (itemId: string, newStatus: "completed" | "in-progress" | "pending") => {
+    if (!user || !workspace) return
+    const updatedChecklist = workspace.complianceChecklist.map((item) =>
+      item.id === itemId ? { ...item, status: newStatus } : item
+    )
+    setWorkspace((prev) => prev ? { ...prev, complianceChecklist: updatedChecklist } : prev)
+    
+    try {
+      await apiFetch(user, `/api/workspaces/${workspace.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ complianceChecklist: updatedChecklist }),
+      })
+      setMessage("Compliance checklist updated.")
+    } catch (err) {
+      console.error("Failed to update compliance checklist:", err)
+      setError(err instanceof Error ? err.message : "Unable to save compliance status.")
+      void load()
+    }
+  }
+
+  const handleAddTechItem = async () => {
+    if (!user || !workspace || !newTechItem.trim()) return
+    const cat = newTechCategory
+    const list = [...workspace.techStack[cat], newTechItem.trim()]
+    const updatedTech = {
+      ...workspace.techStack,
+      [cat]: list
+    }
+    
+    setWorkspace((prev) => prev ? { ...prev, techStack: updatedTech } : prev)
+    setNewTechItem("")
+    
+    try {
+      await apiFetch(user, `/api/workspaces/${workspace.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ techStack: updatedTech }),
+      })
+      setMessage("Tech stack roadmap updated.")
+    } catch (err) {
+      console.error("Failed to update tech stack:", err)
+      setError(err instanceof Error ? err.message : "Unable to save tech stack.")
+      void load()
+    }
+  }
+
+  const handleRemoveTechItem = async (cat: "current" | "expected" | "upcoming", index: number) => {
+    if (!user || !workspace) return
+    const list = workspace.techStack[cat].filter((_, i) => i !== index)
+    const updatedTech = {
+      ...workspace.techStack,
+      [cat]: list
+    }
+    
+    setWorkspace((prev) => prev ? { ...prev, techStack: updatedTech } : prev)
+    
+    try {
+      await apiFetch(user, `/api/workspaces/${workspace.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ techStack: updatedTech }),
+      })
+      setMessage("Tech stack roadmap updated.")
+    } catch (err) {
+      console.error("Failed to update tech stack:", err)
+      setError(err instanceof Error ? err.message : "Unable to save tech stack.")
+      void load()
+    }
+  }
+
   const saveConnectors = async () => {
     if (!user || !workspace || !canManageWorkspace) return
     setSavingConnectors(true)
@@ -2997,18 +3143,101 @@ export default function WorkspacePage() {
 
   if (authLoading || loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/95 text-white backdrop-blur-md">
+        <div className="relative flex items-center justify-center">
+          <div className="h-24 w-24 rounded-full border-4 border-white/5" />
+          <div className="absolute h-24 w-24 rounded-full border-4 border-transparent border-t-indigo-500 animate-spin" />
+          <span className="absolute font-display text-xl font-semibold text-white">{loadingProgress}%</span>
+        </div>
+        <div className="mt-8 text-center space-y-2">
+          <h3 className="font-display text-lg font-semibold text-white tracking-wide">
+            Assembling Workspace Context
+          </h3>
+          <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400 animate-pulse">
+            {loadingProgress < 15 ? "Initializing security handshake..." : 
+             loadingProgress < 40 ? "Assembling team access controls..." : 
+             loadingProgress < 65 ? "Syncing developer repositories..." : 
+             loadingProgress < 85 ? "Parsing ledger transactions..." : 
+             "Initializing user interface..."}
+          </p>
+        </div>
       </div>
     )
   }
 
   if (!workspace) return null
 
+  const filteredWorkspaces = allWorkspaces.filter((ws) =>
+    (ws.workspaceName || ws.name || "").toLowerCase().includes(switcherSearch.toLowerCase())
+  )
+
+  const titleNode = (
+    <div className="relative inline-block text-left" id="workspace-switcher">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          setSwitcherOpen(!switcherOpen)
+        }}
+        className="group flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-white/70 px-4 py-2 font-display text-2xl font-bold tracking-tight text-slate-900 transition shadow-sm hover:border-slate-350 hover:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
+      >
+        <span>{workspace.workspaceName || workspace.name}</span>
+        <ChevronDown className="h-5 w-5 text-slate-500 transition-transform duration-200 group-hover:text-slate-700" style={{ transform: switcherOpen ? 'rotate(180deg)' : 'none' }} />
+      </button>
+
+      {switcherOpen && (
+        <div className="absolute left-0 mt-3 z-[60] w-72 origin-top-left rounded-3xl border border-border/70 bg-white/95 p-3 shadow-[0_24px_60px_rgba(15,23,42,0.12)] backdrop-blur-xl animate-in fade-in-0 zoom-in-95 duration-150">
+          <div className="relative mb-2 flex items-center">
+            <Search className="absolute left-3.5 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search workspaces..."
+              value={switcherSearch}
+              onChange={(e) => setSwitcherSearch(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 pl-10 pr-4 py-2 text-sm text-slate-800 placeholder:text-slate-400 outline-none focus:border-slate-350 focus:bg-white"
+              autoFocus
+            />
+          </div>
+          <div className="max-h-60 overflow-y-auto space-y-1 p-1">
+            {filteredWorkspaces.length === 0 ? (
+              <p className="py-4 text-center text-xs text-slate-500">No workspaces found</p>
+            ) : (
+              filteredWorkspaces.map((ws) => {
+                const isActive = ws.id === workspace.id
+                return (
+                  <button
+                    key={ws.id}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setSwitcherOpen(false)
+                      setSwitcherSearch("")
+                      router.push(`/workspace/${ws.id}`)
+                    }}
+                    className={[
+                      "flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-left text-sm font-semibold transition-colors",
+                      isActive
+                        ? "bg-slate-950 text-white"
+                        : "text-slate-750 hover:bg-slate-100 hover:text-slate-900",
+                    ].join(" ")}
+                  >
+                    <Building className="h-4 w-4 opacity-75" />
+                    <span className="truncate">{ws.workspaceName || ws.name}</span>
+                  </button>
+                )
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
   return (
     <AppShell
       eyebrow="Workspace"
-      title={workspace.name}
+      title={titleNode}
       description={
         workspace.primaryDomain ??
         workspace.clientId ??
@@ -3147,7 +3376,7 @@ export default function WorkspacePage() {
           </TabsTrigger>
           <TabsTrigger value="intake">
             <FileText className="mr-2 h-4 w-4" />
-            Intake
+            Intake & Compliance
             {activeQuestionnaire && !isCompleted(activeQuestionnaire) ? (
               <span className="ml-1.5 inline-block h-2 w-2 rounded-full bg-amber-400" />
             ) : null}
@@ -5330,55 +5559,258 @@ export default function WorkspacePage() {
 
         {/* ── Intake ── */}
         <TabsContent value="intake">
-          <Card>
-            <CardHeader>
-              <CardTitle>Intake</CardTitle>
-              <CardDescription>
-                Project questionnaires and discovery forms sent by the Readyaimgo team.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {questionnairesLoading ? (
-                <div className="h-28 animate-pulse rounded-2xl bg-muted/40" />
-              ) : !activeQuestionnaire && completedQuestionnaires.length === 0 ? (
-                <Card className="border-dashed">
-                  <CardContent className="py-8 text-center text-sm text-muted-foreground">
-                    No intake form yet. Ezra will send one when it&apos;s time to gather
-                    information about your project.
-                  </CardContent>
-                </Card>
-              ) : null}
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Intake Questionnaires</CardTitle>
+                <CardDescription>
+                  Project questionnaires and discovery forms sent by the Readyaimgo team.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {questionnairesLoading ? (
+                  <div className="h-28 animate-pulse rounded-2xl bg-muted/40" />
+                ) : !activeQuestionnaire && completedQuestionnaires.length === 0 ? (
+                  <Card className="border-dashed">
+                    <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                      No active intake form yet. Ezra will send one when it&apos;s time to gather
+                      information about your project.
+                    </CardContent>
+                  </Card>
+                ) : null}
 
-              {activeQuestionnaire && user ? (
-                <IntakeQuestionnaire
-                  questionnaire={activeQuestionnaire}
-                  workspaceId={params.workspaceId}
-                  user={user}
-                />
-              ) : null}
+                {activeQuestionnaire && user ? (
+                  <IntakeQuestionnaire
+                    questionnaire={activeQuestionnaire}
+                    workspaceId={params.workspaceId}
+                    user={user}
+                  />
+                ) : null}
 
-              {completedQuestionnaires.length > 0 ? (
-                <div className="space-y-2">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Completed Forms
-                  </p>
-                  {completedQuestionnaires.map((questionnaire) => (
-                    <div
-                      key={questionnaire.id}
-                      className="flex items-center justify-between rounded-lg border px-4 py-2.5 text-sm"
-                    >
-                      <span className="font-medium">{questionnaire.title}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {questionnaire.completedAt
-                          ? new Date(questionnaire.completedAt).toLocaleDateString()
-                          : ""}
-                      </span>
+                {completedQuestionnaires.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Completed Forms
+                    </p>
+                    {completedQuestionnaires.map((questionnaire) => (
+                      <div
+                        key={questionnaire.id}
+                        className="flex items-center justify-between rounded-lg border px-4 py-2.5 text-sm"
+                      >
+                        <span className="font-medium">{questionnaire.title}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {questionnaire.completedAt
+                            ? new Date(questionnaire.completedAt).toLocaleDateString()
+                            : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            {/* Compliance & Tech Stack Section */}
+            <div className="grid gap-6 lg:grid-cols-2">
+              
+              {/* Tech Stack Card */}
+              <Card className="flex flex-col">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Server className="h-5 w-5 text-indigo-500" />
+                    Technology Stack & Roadmap
+                  </CardTitle>
+                  <CardDescription>
+                    Active framework components, expected API integrations, and planned stack additions.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex-1 space-y-6">
+                  {/* Current Stack */}
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Current Tech Stack</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {workspace.techStack?.current.map((item, idx) => (
+                        <div key={idx} className="flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-250 px-3 py-1 text-xs font-semibold text-emerald-700">
+                          <span>{item}</span>
+                          {canManageWorkspace && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveTechItem("current", idx)}
+                              className="ml-1 text-emerald-500 hover:text-emerald-800 focus:outline-none"
+                            >
+                              &times;
+                            </button>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
+                  </div>
+
+                  {/* Expected Integrations */}
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Expected / Next Up</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {workspace.techStack?.expected.map((item, idx) => (
+                        <div key={idx} className="flex items-center gap-1 rounded-full bg-amber-50 border border-amber-250 px-3 py-1 text-xs font-semibold text-amber-700">
+                          <span>{item}</span>
+                          {canManageWorkspace && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveTechItem("expected", idx)}
+                              className="ml-1 text-amber-500 hover:text-amber-800 focus:outline-none"
+                            >
+                              &times;
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Upcoming Roadmaps */}
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Upcoming / Long-Term</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {workspace.techStack?.upcoming.map((item, idx) => (
+                        <div key={idx} className="flex items-center gap-1 rounded-full bg-slate-50 border border-slate-205 px-3 py-1 text-xs font-semibold text-slate-700">
+                          <span>{item}</span>
+                          {canManageWorkspace && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveTechItem("upcoming", idx)}
+                              className="ml-1 text-slate-400 hover:text-slate-700 focus:outline-none"
+                            >
+                              &times;
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Add Tech Stack Item (Admin only) */}
+                  {canManageWorkspace && (
+                    <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
+                      <h4 className="text-xs font-bold text-slate-600">Add Tech Stack Component</h4>
+                      <div className="flex flex-wrap gap-2 items-center">
+                        <input
+                          type="text"
+                          placeholder="e.g. Redis Cache, SendGrid API..."
+                          value={newTechItem}
+                          onChange={(e) => setNewTechItem(e.target.value)}
+                          className="flex-1 min-w-[180px] h-10 rounded-xl border border-slate-200 px-3 text-sm text-slate-800 outline-none focus:border-slate-350"
+                        />
+                        <select
+                          value={newTechCategory}
+                          onChange={(e) => setNewTechCategory(e.target.value as any)}
+                          className="h-10 rounded-xl border border-slate-200 px-3 text-sm text-slate-750 bg-white outline-none focus:border-slate-350"
+                        >
+                          <option value="current">Current Stack</option>
+                          <option value="expected">Expected/Next</option>
+                          <option value="upcoming">Upcoming/Long-term</option>
+                        </select>
+                        <Button
+                          type="button"
+                          onClick={handleAddTechItem}
+                          disabled={!newTechItem.trim()}
+                          size="sm"
+                        >
+                          Add Item
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Compliance Checklist Card */}
+              <Card className="flex flex-col">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <ShieldCheck className="h-5 w-5 text-emerald-500" />
+                    SOC 2 & Compliance Control Audit
+                  </CardTitle>
+                  <CardDescription>
+                    Framework controls, physical and database authorization policies, and GDPR audit checks.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex-1 space-y-6">
+                  {/* Progress Header */}
+                  {(() => {
+                    const checklist = workspace.complianceChecklist || []
+                    const completedCount = checklist.filter((x) => x.status === "completed").length
+                    const totalCount = checklist.length
+                    const percent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0
+
+                    return (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-sm font-semibold">
+                          <span className="text-slate-600">Audit Completion Progress</span>
+                          <span className="text-indigo-600">{completedCount} of {totalCount} Met ({percent}%)</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                          <div className="bg-emerald-500 h-full rounded-full transition-all duration-500" style={{ width: `${percent}%` }} />
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* Checklist Items */}
+                  <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
+                    {(workspace.complianceChecklist || []).map((item) => (
+                      <div key={item.id} className="rounded-2xl border border-slate-100 bg-slate-50/30 p-4 space-y-2 transition-shadow hover:shadow-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-1">
+                            <h5 className="text-sm font-bold text-slate-800">{item.name}</h5>
+                            <p className="text-xs text-slate-500 leading-normal">{item.description}</p>
+                          </div>
+                          
+                          {/* Compliance Status Selector / Badge */}
+                          {canManageWorkspace ? (
+                            <select
+                              value={item.status}
+                              onChange={(e) => handleUpdateComplianceStatus(item.id, e.target.value as any)}
+                              className={[
+                                "rounded-lg border px-2 py-1 text-xs font-semibold outline-none focus:ring-1 focus:ring-slate-300",
+                                item.status === "completed" ? "bg-emerald-50 border-emerald-200 text-emerald-700" :
+                                item.status === "in-progress" ? "bg-amber-50 border-amber-200 text-amber-700" :
+                                "bg-slate-50 border-slate-200 text-slate-600"
+                              ].join(" ")}
+                            >
+                              <option value="completed">Compliant</option>
+                              <option value="in-progress">In Progress</option>
+                              <option value="pending">Planned</option>
+                            </select>
+                          ) : (
+                            <Badge
+                              variant={
+                                item.status === "completed"
+                                  ? "success"
+                                  : item.status === "in-progress"
+                                  ? "warning"
+                                  : "secondary"
+                              }
+                              className={
+                                item.status === "completed"
+                                  ? "bg-emerald-55/10 border-emerald-200 text-emerald-700"
+                                  : item.status === "in-progress"
+                                  ? "bg-amber-55/10 border-amber-200 text-amber-700"
+                                  : "bg-slate-50 border-slate-200 text-slate-650"
+                              }
+                            >
+                              {item.status === "completed" ? "Compliant" :
+                               item.status === "in-progress" ? "In Progress" : "Planned"}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+            </div>
+          </div>
         </TabsContent>
 
         {/* ── Payments ── */}

@@ -21,6 +21,7 @@ export const CONTRACT_TYPES = [
   "anchor_partner",
   "cohort_services",
   "mou",
+  "client_project",
 ] as const
 
 export const CONTRACT_STATUSES = [
@@ -109,6 +110,8 @@ export interface BeamContract {
   notes: string
   pricingCadence?: "one-time" | "monthly" | "milestone" | "custom"
   paymentDates?: string[]
+  milestoneAmountsCents?: number[]
+  totalContractValueCents?: number
   pendingFinancialProposal?: ContractFinancialProposal | null
   legalReviews?: LegalReview[]
   financialReviews?: FinancialReview[]
@@ -245,6 +248,10 @@ export function normalizeContract(id: string, data: Record<string, unknown>): Be
     notes: readString(data.notes),
     pricingCadence: normalizeCadence(data.pricingCadence),
     paymentDates: readStringArray(data.paymentDates),
+    milestoneAmountsCents: Array.isArray(data.milestoneAmountsCents)
+      ? data.milestoneAmountsCents.map((v) => readNumber(v, 0))
+      : [],
+    totalContractValueCents: readNumber(data.totalContractValueCents),
     pendingFinancialProposal: normalizeFinancialProposal(data.pendingFinancialProposal),
   }
 }

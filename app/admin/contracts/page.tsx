@@ -76,6 +76,7 @@ const CONTRACT_TYPE_LABELS: Record<ContractType, string> = {
   anchor_partner: "Anchor Partner",
   cohort_services: "Cohort Services",
   mou: "MOU",
+  client_project: "Client Project",
 }
 
 const STATUS_LABELS: Record<ContractStatus, string> = {
@@ -97,6 +98,11 @@ const NGO_LABELS: Record<string, string> = {
 
 // ─── Create form default state ────────────────────────────────────────────────
 
+interface MilestoneInput {
+  label: string
+  amount: string
+}
+
 interface CreateFormState {
   workspaceId: string
   clientId: string
@@ -106,11 +112,13 @@ interface CreateFormState {
   summary: string
   monthlyValue: string
   termMonths: string
+  totalContractValue: string
   startDate: string
   endDate: string
   contractType: ContractType
   beamNgos: string[]
   notes: string
+  milestones: MilestoneInput[]
 }
 
 const FORM_DEFAULTS: CreateFormState = {
@@ -122,11 +130,13 @@ const FORM_DEFAULTS: CreateFormState = {
   summary: "",
   monthlyValue: "",
   termMonths: "",
+  totalContractValue: "",
   startDate: "",
   endDate: "",
   contractType: "mou",
   beamNgos: [],
   notes: "",
+  milestones: [],
 }
 
 // ─── Create Contract Dialog ───────────────────────────────────────────────────
@@ -169,6 +179,31 @@ function CreateContractDialog({
     }))
   }
 
+  function addMilestone() {
+    setForm((prev) => ({
+      ...prev,
+      milestones: [
+        ...prev.milestones,
+        { label: `Milestone ${prev.milestones.length + 1}`, amount: "" },
+      ],
+    }))
+  }
+
+  function updateMilestone(index: number, field: "label" | "amount", value: string) {
+    setForm((prev) => {
+      const next = [...prev.milestones]
+      next[index] = { ...next[index], [field]: value }
+      return { ...prev, milestones: next }
+    })
+  }
+
+  function removeMilestone(index: number) {
+    setForm((prev) => ({
+      ...prev,
+      milestones: prev.milestones.filter((_, i) => i !== index),
+    }))
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!form.clientId.trim() || !form.title.trim()) {
@@ -176,9 +211,33 @@ function CreateContractDialog({
       return
     }
 
+    const validMilestones = form.milestones.filter((m) => m.label.trim().length > 0)
+    let totalContractValueCents = form.totalContractValue
+      ? Math.round(Number(form.totalContractValue) * 100)
+      : 0
+    let milestoneAmountsCents: number[] = []
+
+    if (validMilestones.length > 0) {
+      milestoneAmountsCents = validMilestones.map((m) =>
+        Math.round(Number(m.amount || 0) * 100)
+      )
+      const sumCents = milestoneAmountsCents.reduce((a, b) => a + b, 0)
+      if (totalContractValueCents > 0 && Math.abs(sumCents - totalContractValueCents) > 1) {
+        setError(
+          `Sum of milestone amounts ($${(sumCents / 100).toFixed(2)}) must equal Total Contract Value ($${(totalContractValueCents / 100).toFixed(2)}).`
+        )
+        return
+      }
+      if (totalContractValueCents === 0) {
+        totalContractValueCents = sumCents
+      }
+    }
+
     setError(null)
     setCreating(true)
     try {
+      const paymentDates = validMilestones.map((m) => m.label.trim())
+
       const res = await apiFetch<{ contractId: string }>(user, "/api/contracts", {
         method: "POST",
         body: JSON.stringify({
@@ -195,6 +254,9 @@ function CreateContractDialog({
           contractType: form.contractType,
           beamNgos: form.beamNgos,
           notes: form.notes.trim(),
+          paymentDates,
+          milestoneAmountsCents,
+          totalContractValueCents,
         }),
       })
 
@@ -216,6 +278,9 @@ function CreateContractDialog({
         status: "draft",
         beamNgos: form.beamNgos,
         notes: form.notes.trim(),
+        paymentDates,
+        milestoneAmountsCents,
+        totalContractValueCents,
         createdAt: now,
         updatedAt: now,
         createdBy: "",
@@ -328,7 +393,20 @@ function CreateContractDialog({
               <label className="text-xs font-medium text-slate-600">Contract Type</label>
               <Select
                 value={form.contractType}
-                onValueChange={(v) => set("contractType", v as ContractType)}
+                onValueChange={(v) => {
+                  const newType = v as ContractType
+                  set("contractType", newType)
+                  if (newType === "client_project" && form.milestones.length === 0) {
+                    setForm((prev) => ({
+                      ...prev,
+                      contractType: newType,
+                      milestones: [
+                        { label: "Milestone 1: Kickoff & Setup", amount: "" },
+                        { label: "Milestone 2: Final Handover", amount: "" },
+                      ],
+                    }))
+                  }
+                }}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -352,14 +430,26 @@ function CreateContractDialog({
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-600">Monthly Value ($)</label>
+                <label className="text-xs font-medium text-slate-600">
+                  {form.contractType === "client_project"
+                    ? "Total Contract Value ($)"
+                    : "Monthly Value ($)"}
+                </label>
                 <Input
                   type="number"
                   min="0"
                   step="0.01"
                   placeholder="0.00"
-                  value={form.monthlyValue}
-                  onChange={(e) => set("monthlyValue", e.target.value)}
+                  value={
+                    form.contractType === "client_project"
+                      ? form.totalContractValue
+                      : form.monthlyValue
+                  }
+                  onChange={(e) =>
+                    form.contractType === "client_project"
+                      ? set("totalContractValue", e.target.value)
+                      : set("monthlyValue", e.target.value)
+                  }
                 />
               </div>
               <div className="space-y-1">
@@ -395,11 +485,76 @@ function CreateContractDialog({
             </div>
           </fieldset>
 
+          {/* Milestones Section */}
+          <fieldset className="space-y-3">
+            <div className="flex items-center justify-between">
+              <legend className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                Milestone Invoicing Schedule
+              </legend>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={addMilestone}
+              >
+                <Plus className="mr-1 h-3 w-3" /> Add Milestone
+              </Button>
+            </div>
+
+            {form.milestones.length === 0 ? (
+              <p className="text-xs text-slate-400 italic">
+                No milestones added. Click &quot;Add Milestone&quot; to configure structured invoice milestones (e.g. RAG-CLIENT-MW1).
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {form.milestones.map((m, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Input
+                      placeholder={`e.g. Milestone ${idx + 1}: Implementation`}
+                      value={m.label}
+                      onChange={(e) => updateMilestone(idx, "label", e.target.value)}
+                      className="flex-1 text-xs"
+                    />
+                    <div className="w-32 relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400">
+                        $
+                      </span>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="Amount"
+                        value={m.amount}
+                        onChange={(e) => updateMilestone(idx, "amount", e.target.value)}
+                        className="pl-6 text-xs"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeMilestone(idx)}
+                      className="h-8 w-8 p-0 text-slate-400 hover:text-rose-600"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </fieldset>
+
           {/* BEAM NGOs */}
           <fieldset className="space-y-2">
-            <legend className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-2">
-              BEAM NGOs Involved
-            </legend>
+            <div className="flex items-center justify-between">
+              <legend className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+                BEAM NGOs Involved
+              </legend>
+              {form.contractType === "client_project" && (
+                <span className="text-[11px] text-slate-400 font-normal">(Optional for Client Projects)</span>
+              )}
+            </div>
             <div className="flex flex-wrap gap-2">
               {BEAM_NGOS.map((ngo) => {
                 const selected = form.beamNgos.includes(ngo)

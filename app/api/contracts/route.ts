@@ -256,6 +256,13 @@ export async function POST(req: NextRequest) {
         ? body.beamNgos.filter((n): n is string => typeof n === "string")
         : [],
       notes: readString(body.notes),
+      paymentDates: Array.isArray(body.paymentDates)
+        ? body.paymentDates.filter((d): d is string => typeof d === "string" && d.trim().length > 0)
+        : [],
+      milestoneAmountsCents: Array.isArray(body.milestoneAmountsCents)
+        ? body.milestoneAmountsCents.map((v) => Number(v) || 0)
+        : [],
+      totalContractValueCents: readNumber(body.totalContractValueCents),
     })
 
     return NextResponse.json({ contractId: ref.id }, { status: 201 })

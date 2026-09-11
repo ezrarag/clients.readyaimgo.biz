@@ -1,5 +1,5 @@
 export type InvoiceTemplateDefinition = {
-  id: "nexus" | "space" | "motion" | "cohort" | "contract_milestone"
+  id: "nexus" | "space" | "motion" | "cohort" | "contract_milestone" | "client_milestone"
   label: string
   productLabel: string
   fileName: string
@@ -47,6 +47,14 @@ export const INVOICE_TEMPLATES: InvoiceTemplateDefinition[] = [
     fileName: "ReadyAimGo Invoice - Contract Milestone.html",
     seedInvoiceNumber: "MILESTONE-2026-0001",
     defaultDescription: "Contract milestone",
+  },
+  {
+    id: "client_milestone",
+    label: "Client Milestone",
+    productLabel: "Client Milestone",
+    fileName: "ReadyAimGo Invoice - Client Milestone.html",
+    seedInvoiceNumber: "RAG-2026-0001",
+    defaultDescription: "Client project milestone",
   },
 ]
 

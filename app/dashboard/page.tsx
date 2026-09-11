@@ -400,6 +400,26 @@ export default function DashboardPage() {
   const [initialProjectType, setInitialProjectType] = useState<AssetProjectType>("webdev")
   const [showCreate, setShowCreate] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [transitioningToWorkspaceId, setTransitioningToWorkspaceId] = useState<string | null>(null)
+  const [transitionProgress, setTransitionProgress] = useState(0)
+
+  const handleWorkspaceClick = (workspaceId: string) => {
+    setTransitioningToWorkspaceId(workspaceId)
+    setTransitionProgress(0)
+    
+    const interval = setInterval(() => {
+      setTransitionProgress((prev) => {
+        if (prev >= 98) {
+          clearInterval(interval)
+          return 98
+        }
+        const increment = Math.max(1, Math.round((100 - prev) / 12))
+        return prev + increment
+      })
+    }, 100)
+    
+    router.push(`/workspace/${workspaceId}`)
+  }
 
   useEffect(() => {
     if (authLoading) return
@@ -452,6 +472,29 @@ export default function DashboardPage() {
   }
 
   if (!user) return null
+
+  if (transitioningToWorkspaceId) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/95 backdrop-blur-md">
+        <div className="relative flex items-center justify-center">
+          <div className="h-24 w-24 rounded-full border-4 border-white/5" />
+          <div className="absolute h-24 w-24 rounded-full border-4 border-transparent border-t-indigo-500 animate-spin" />
+          <span className="absolute font-display text-xl font-semibold text-white">{transitionProgress}%</span>
+        </div>
+        <div className="mt-8 text-center space-y-2">
+          <h3 className="font-display text-lg font-semibold text-white tracking-wide">
+            Transitioning to Workspace
+          </h3>
+          <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-slate-400 animate-pulse">
+            {transitionProgress < 30 ? "Initializing handshake..." : 
+             transitionProgress < 60 ? "Downloading repository schemas..." : 
+             transitionProgress < 85 ? "Parsing ledger transactions..." : 
+             "Preparing dashboard view..."}
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <AppShell
@@ -593,11 +636,11 @@ export default function DashboardPage() {
                 role="link"
                 tabIndex={0}
                 className="h-full cursor-pointer transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                onClick={() => router.push(`/workspace/${ws.id}`)}
+                onClick={() => handleWorkspaceClick(ws.id)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault()
-                    router.push(`/workspace/${ws.id}`)
+                    handleWorkspaceClick(ws.id)
                   }
                 }}
               >

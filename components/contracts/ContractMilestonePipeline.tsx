@@ -109,7 +109,7 @@ export function ContractMilestonePipeline({
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-neutral-500">
                         <span>Invoice: {matchingInvoice.invoiceNumber}</span>
                         <span>·</span>
-                        <span>Due: {new Date(matchingInvoice.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
+                        <span>Due: {matchingInvoice.dueDate.toLowerCase().includes("receipt") ? "Upon receipt" : (Number.isNaN(new Date(matchingInvoice.dueDate).getTime()) ? matchingInvoice.dueDate : new Date(matchingInvoice.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }))}</span>
                         {totalCents > 0 && (
                           <>
                             <span>·</span>
@@ -118,7 +118,12 @@ export function ContractMilestonePipeline({
                         )}
                       </div>
                     ) : (
-                      <p className="text-xs text-neutral-600">No invoice issued yet.</p>
+                      <p className="text-xs text-neutral-500">
+                        No invoice issued yet.
+                        {contract.milestoneAmountsCents?.[idx] ? (
+                          <span className="ml-1 text-neutral-400 font-medium">({formatCurrency(contract.milestoneAmountsCents[idx])})</span>
+                        ) : null}
+                      </p>
                     )}
                   </div>
 

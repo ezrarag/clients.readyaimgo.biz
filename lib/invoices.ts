@@ -50,6 +50,10 @@ export interface ClientInvoice {
   createdAt?: string | null
   updatedAt?: string | null
   installmentIndex?: number | null
+  milestoneLabel?: string | null
+  totalContractValueCents?: number | null
+  paidToDateCents?: number | null
+  paymentMethods?: { stripe: boolean; manual: boolean } | null
   allocation?: InvoiceAllocation | null
 }
 
@@ -132,6 +136,13 @@ export function normalizeInvoice(id: string, data: Record<string, unknown>): Cli
     createdAt: typeof data.createdAt === "string" ? data.createdAt : null,
     updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : null,
     installmentIndex: typeof data.installmentIndex === "number" ? data.installmentIndex : null,
+    milestoneLabel: typeof data.milestoneLabel === "string" ? data.milestoneLabel : null,
+    totalContractValueCents: readNumber(data.totalContractValueCents),
+    paidToDateCents: readNumber(data.paidToDateCents),
+    paymentMethods: data.paymentMethods && typeof data.paymentMethods === "object" ? {
+      stripe: Boolean((data.paymentMethods as any).stripe),
+      manual: Boolean((data.paymentMethods as any).manual),
+    } : null,
     allocation: data.allocation && typeof data.allocation === "object" ? {
       directedTo: (data.allocation as any).directedTo || "as_invoiced",
       amountCents: typeof (data.allocation as any).amountCents === "number" ? (data.allocation as any).amountCents : 0,

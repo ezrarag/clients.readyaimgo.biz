@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { Loader2, Plus, Send, FileText } from "lucide-react"
 import { useAuth } from "@/components/auth/AuthProvider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -61,6 +62,7 @@ const TYPE_LABELS: Record<ContractType, string> = {
   anchor_partner: "Anchor Partner",
   cohort_services: "Cohort Services",
   mou: "MOU",
+  client_project: "Client Project",
 }
 
 const NGO_LABELS: Record<string, string> = {
@@ -219,6 +221,102 @@ export function ContractDetailModal({
   const [proposalLoading, setProposalLoading] = useState(false)
   const [proposalError, setProposalError] = useState("")
   const [proposalSuccess, setProposalSuccess] = useState("")
+
+  const [contractInvoices, setContractInvoices] = useState<ClientInvoice[]>(invoices || [])
+  const [generatingInvoice, setGeneratingInvoice] = useState(false)
+  const [invoiceGenError, setInvoiceGenError] = useState("")
+  const [previewInvoice, setPreviewInvoice] = useState<ClientInvoice | null>(null)
+  const [markingSent, setMarkingSent] = useState(false)
+  const [sendSuccessMsg, setSendSuccessMsg] = useState("")
+
+  useEffect(() => {
+    if (invoices) {
+      setContractInvoices(invoices)
+    }
+  }, [invoices])
+
+  useEffect(() => {
+    if (open && contract?.id && user) {
+      setInvoiceGenError("")
+      setSendSuccessMsg("")
+      user.getIdToken().then((token) => {
+        fetch(`/api/contracts/${contract.id}/invoices`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data?.invoices) {
+              setContractInvoices(data.invoices)
+            }
+          })
+          .catch(() => {})
+      })
+    }
+  }, [open, contract?.id, user])
+
+  const handleGenerateNextInvoice = async () => {
+    if (!user || !contract) return
+    setInvoiceGenError("")
+    setSendSuccessMsg("")
+    setGeneratingInvoice(true)
+    try {
+      const token = await user.getIdToken()
+      const res = await fetch(`/api/contracts/${contract.id}/generate-invoice`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to generate invoice.")
+      }
+      if (data.invoice) {
+        setContractInvoices((prev) => [...prev, data.invoice])
+        setPreviewInvoice(data.invoice)
+      }
+    } catch (err) {
+      setInvoiceGenError(err instanceof Error ? err.message : "Failed to generate invoice.")
+    } finally {
+      setGeneratingInvoice(false)
+    }
+  }
+
+  const handleMarkInvoiceSent = async () => {
+    if (!user || !contract || !previewInvoice) return
+    setMarkingSent(true)
+    try {
+      const token = await user.getIdToken()
+      const res = await fetch(
+        `/api/contracts/${contract.id}/invoices/${previewInvoice.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ status: "client_review" }),
+        }
+      )
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to mark invoice as sent.")
+      }
+      if (data.invoice) {
+        setContractInvoices((prev) =>
+          prev.map((i) => (i.id === data.invoice.id ? data.invoice : i))
+        )
+        setPreviewInvoice(data.invoice)
+        setSendSuccessMsg(`Invoice ${data.invoice.invoiceNumber} marked as sent & published!`)
+      }
+    } catch (err) {
+      setInvoiceGenError(err instanceof Error ? err.message : "Failed to update invoice.")
+    } finally {
+      setMarkingSent(false)
+    }
+  }
 
   if (!contract) return null
 
@@ -621,15 +719,49 @@ export function ContractDetailModal({
           ) : null}
 
           {/* Milestone Invoicing Pipeline */}
-          {contract.paymentDates && contract.paymentDates.length > 0 && invoices && (
+          {contract.paymentDates && contract.paymentDates.length > 0 && (
             <Section title="Milestones">
               <ContractMilestonePipeline
                 contract={contract}
-                invoices={invoices}
+                invoices={contractInvoices}
                 deliverables={deliverables || []}
                 onPayDeliverable={onPayDeliverable || (async () => {})}
                 payingDeliverableId={payingDeliverableId || null}
               />
+
+              {isAdmin && (
+                <div className="pt-2 space-y-2">
+                  {invoiceGenError && (
+                    <p className="text-xs text-rose-600 bg-rose-50 p-2 rounded-lg border border-rose-200">
+                      {invoiceGenError}
+                    </p>
+                  )}
+                  {sendSuccessMsg && (
+                    <p className="text-xs text-emerald-700 bg-emerald-50 p-2 rounded-lg border border-emerald-200">
+                      {sendSuccessMsg}
+                    </p>
+                  )}
+                  {contractInvoices.length < contract.paymentDates.length ? (
+                    <Button
+                      size="sm"
+                      onClick={handleGenerateNextInvoice}
+                      disabled={generatingInvoice}
+                      className="bg-primary text-primary-foreground font-medium text-xs flex items-center gap-1.5"
+                    >
+                      {generatingInvoice ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Plus className="h-3.5 w-3.5" />
+                      )}
+                      {generatingInvoice ? "Generating Invoice..." : "Generate Next Invoice"}
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic">
+                      All milestones for this contract have been invoiced.
+                    </p>
+                  )}
+                </div>
+              )}
             </Section>
           )}
 
@@ -710,6 +842,81 @@ export function ContractDetailModal({
           ) : null}
         </div>
       </DialogContent>
+
+      {/* Rendered HTML Invoice Preview Modal */}
+      {previewInvoice && (
+        <Dialog open={Boolean(previewInvoice)} onOpenChange={(v) => !v && setPreviewInvoice(null)}>
+          <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col">
+            <DialogHeader>
+              <div className="flex items-center justify-between pr-6">
+                <div>
+                  <DialogTitle className="text-lg font-bold">
+                    Invoice Preview: {previewInvoice.invoiceNumber}
+                  </DialogTitle>
+                  <p className="text-xs text-slate-500 mt-0.5">{previewInvoice.title}</p>
+                </div>
+                <Badge
+                  variant={
+                    previewInvoice.status === "draft"
+                      ? "secondary"
+                      : previewInvoice.status === "client_review"
+                      ? "warning"
+                      : "success"
+                  }
+                >
+                  {previewInvoice.status === "draft" ? "Draft Preview" : previewInvoice.status}
+                </Badge>
+              </div>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-y-auto min-h-[450px] border border-border/80 rounded-xl bg-slate-900/5 p-1">
+              {previewInvoice.renderedHtml ? (
+                <iframe
+                  srcDoc={previewInvoice.renderedHtml}
+                  className="w-full h-[520px] rounded-lg bg-white border border-slate-200"
+                  title={`Invoice ${previewInvoice.invoiceNumber}`}
+                />
+              ) : (
+                <div className="p-6 text-slate-700 bg-white rounded-lg space-y-2">
+                  <h4 className="font-bold text-lg">{previewInvoice.title}</h4>
+                  <p className="text-sm text-slate-500">
+                    Amount: ${(previewInvoice.totalCents / 100).toFixed(2)}
+                  </p>
+                  <p className="text-sm text-slate-500">Due: {previewInvoice.dueDate}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-between items-center pt-3 border-t border-border/60">
+              <p className="text-xs text-slate-500">
+                {previewInvoice.status === "draft"
+                  ? "Marking as sent will publish this invoice to the client portal for review & payment."
+                  : "Invoice is sent and published to the client portal."}
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setPreviewInvoice(null)}>
+                  Close
+                </Button>
+                {previewInvoice.status === "draft" && (
+                  <Button
+                    size="sm"
+                    onClick={handleMarkInvoiceSent}
+                    disabled={markingSent}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium flex items-center gap-1.5"
+                  >
+                    {markingSent ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Send className="h-3.5 w-3.5" />
+                    )}
+                    {markingSent ? "Publishing..." : "Mark as Sent"}
+                  </Button>
+                )}
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </Dialog>
   )
 }

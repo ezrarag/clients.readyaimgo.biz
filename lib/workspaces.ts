@@ -129,6 +129,20 @@ export interface WorkspaceMeetingProvider {
   source: "google-login" | "workspace" | "profile" | "ra-command"
 }
 
+export interface ComplianceItem {
+  id: string
+  name: string
+  status: "completed" | "in-progress" | "pending"
+  description: string
+}
+
+export interface TechStackConfig {
+  current: string[]
+  expected: string[]
+  upcoming: string[]
+}
+
+
 export interface WorkspaceMember {
   uid: string
   email: string
@@ -190,6 +204,9 @@ export interface Workspace {
   meetingProviders: WorkspaceMeetingProvider[]
   /** Google Calendar ID shared with this client (e.g. "abc@group.calendar.google.com"). */
   googleCalendarId: string | null
+  complianceChecklist: ComplianceItem[]
+  techStack: TechStackConfig
+
 
   // ── Legacy bridge fields ────────────────────────────────────────────────────
   // These link a workspace back to the existing clients/{clientId} and
@@ -427,7 +444,24 @@ function normalizeMeetingProviders(data: unknown): WorkspaceMeetingProvider[] {
   }).filter((item): item is WorkspaceMeetingProvider => Boolean(item))
 }
 
+export const DEFAULT_COMPLIANCE: ComplianceItem[] = [
+  { id: "physical-security", name: "Physical Hosting Security", status: "completed", description: "Google Cloud Platform / Firebase physical infrastructure protection (SOC 2 Type II certified)." },
+  { id: "database-rules", name: "Firestore Access Security Rules", status: "in-progress", description: "Granular read/write security rules active to restrict access to authenticated owners." },
+  { id: "pci-dss", name: "PCI-DSS Payment Compliance Scope Reduction", status: "pending", description: "Offload all payment card ingestion to secure Stripe Checkout or Stripe Elements." },
+  { id: "gdpr-privacy", name: "GDPR / CCPA Directory Privacy Compliance", status: "pending", description: "Clear cookie banners, terms, privacy policies, and user data deletion workflows." },
+  { id: "access-mfa", name: "Admin MFA & Token Rotation Policy", status: "in-progress", description: "Two-factor authentication on all administrative GCP/Firebase consoles and API token rotators." },
+]
+
+export const DEFAULT_TECH_STACK: TechStackConfig = {
+  current: ["Next.js (App Router)", "Firebase Firestore", "Tailwind CSS", "Firebase Storage", "Firebase Auth"],
+  expected: ["Stripe Checkout Integration", "Plaid Financial Sync API", "Telnyx SMS Gateway"],
+  upcoming: ["SOC 2 Audit Trail Logging", "Google Calendar Auto-Scheduler", "Telnyx Interactive AI Intent Router"]
+}
+
 export function normalizeWorkspace(id: string, data: Record<string, unknown>): Workspace {
+  const rawCompliance = data.complianceChecklist
+  const rawTech = data.techStack
+
   return {
     id,
     slug: id,
@@ -456,6 +490,21 @@ export function normalizeWorkspace(id: string, data: Record<string, unknown>): W
       typeof data.googleCalendarId === "string" && data.googleCalendarId.trim()
         ? data.googleCalendarId.trim()
         : null,
+    complianceChecklist: Array.isArray(rawCompliance)
+      ? (rawCompliance as any[]).map((item: any) => ({
+          id: String(item.id || ""),
+          name: String(item.name || ""),
+          status: (item.status === "completed" || item.status === "in-progress" || item.status === "pending") ? item.status : "pending",
+          description: String(item.description || ""),
+        }))
+      : DEFAULT_COMPLIANCE,
+    techStack: (rawTech && typeof rawTech === "object")
+      ? {
+          current: Array.isArray((rawTech as any).current) ? ((rawTech as any).current as unknown[]).filter((x): x is string => typeof x === "string") : DEFAULT_TECH_STACK.current,
+          expected: Array.isArray((rawTech as any).expected) ? ((rawTech as any).expected as unknown[]).filter((x): x is string => typeof x === "string") : DEFAULT_TECH_STACK.expected,
+          upcoming: Array.isArray((rawTech as any).upcoming) ? ((rawTech as any).upcoming as unknown[]).filter((x): x is string => typeof x === "string") : DEFAULT_TECH_STACK.upcoming,
+        }
+      : DEFAULT_TECH_STACK,
     // Legacy bridge
     clientId: typeof data.clientId === "string" ? data.clientId : null,
     clientEmail: typeof data.clientEmail === "string" ? data.clientEmail : null,
