@@ -692,6 +692,8 @@ export default function AdminContractsPage() {
         { href: "/dashboard", label: "Workspaces" },
         { href: "/admin/workspaces", label: "Admin · Workspaces" },
         { href: "/admin/contracts", label: "Admin · Contracts", active: true },
+        { href: "/admin/invoices", label: "Admin · Invoices" },
+        { href: "/admin/intake", label: "Admin · Intake" },
       ]}
       actions={
         <div className="flex items-center gap-2">

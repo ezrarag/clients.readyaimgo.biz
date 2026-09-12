@@ -124,6 +124,7 @@ haugabr2@uwm.edu`
         { href: "/dashboard", label: "Workspaces" },
         { href: "/admin/workspaces", label: "Admin · Workspaces" },
         { href: "/admin/contracts", label: "Admin · Contracts" },
+        { href: "/admin/invoices", label: "Admin · Invoices" },
         { href: "/admin/intake", label: "Admin · Intake", active: true },
       ]}
     >
