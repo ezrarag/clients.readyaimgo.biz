@@ -25,9 +25,9 @@ export const MANUAL_PAYMENT_METHODS: ManualPaymentMethods = {
     number: "404-973-9860",
   },
   ach: {
-    bankName: "UW Credit Union",
-    routingNumber: "275978474",
-    accountNumber: "2300054321",
+    bankName: "UWM Credit Union",
+    routingNumber: "275979076",
+    accountNumber: "1095919301",
     accountName: "ReadyAimGo / Ezra Haugabrooks",
   },
 }
