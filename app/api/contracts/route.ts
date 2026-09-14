@@ -20,14 +20,23 @@ function readNumber(v: unknown, fallback = 0) {
 async function resolveUser(req: NextRequest) {
   const token = getBearerToken(req)
   if (!token) return null
+  const internalKey =
+    process.env.RAG_INTERNAL_API_KEY ||
+    process.env.READYAIMGO_INTERNAL_API_KEY ||
+    process.env.DESKTOP_INTERNAL_API_KEY
+  if (internalKey && token === internalKey) {
+    return { uid: "racommand-internal-system", isSystemKey: true }
+  }
   try {
-    return await getAdminAuth().verifyIdToken(token)
+    const decoded = await getAdminAuth().verifyIdToken(token)
+    return { ...decoded, isSystemKey: false }
   } catch {
     return null
   }
 }
 
-async function isAdmin(uid: string) {
+async function isAdmin(uid: string, isSystemKey = false) {
+  if (isSystemKey) return true
   const db = getAdminDb()
   const snap = await db.collection("users").doc(uid).get()
   if (!snap.exists) return false
@@ -37,20 +46,6 @@ async function isAdmin(uid: string) {
 
 // ---------------------------------------------------------------------------
 // GET /api/contracts
-//
-// Three authorization paths — use exactly one:
-//
-//   ?admin=true        Admin path. Caller must be beam-admin. Returns all
-//                      contracts ordered by createdAt desc (up to 500).
-//                      Supports optional ?status= and ?search= filters applied
-//                      server-side via JS after the collection scan.
-//
-//   ?workspaceId=xxx   Workspace-member path. Resolves clientId and
-//                      clientEmail from the workspace doc and queries contracts
-//                      by both identifiers, merged and deduplicated.
-//
-//   ?clientId=xxx      Legacy client path. Caller must own the client record
-//                      (email match) or be an admin.
 // ---------------------------------------------------------------------------
 
 export async function GET(req: NextRequest) {
@@ -65,12 +60,10 @@ export async function GET(req: NextRequest) {
     const workspaceId = req.nextUrl.searchParams.get("workspaceId")?.trim() || ""
     const clientId = req.nextUrl.searchParams.get("clientId")?.trim() || ""
 
-    // ── Admin path ────────────────────────────────────────────────────────────
-    if (adminParam) {
-      if (!(await isAdmin(decoded.uid))) {
-        return NextResponse.json({ error: "Admin access required." }, { status: 403 })
-      }
+    const callerIsAdmin = await isAdmin(decoded.uid, decoded.isSystemKey)
 
+    // ── Admin path (explicit ?admin=true OR no workspaceId/clientId if admin) ──
+    if (adminParam || (callerIsAdmin && !workspaceId && !clientId)) {
       const statusFilter = req.nextUrl.searchParams.get("status")?.trim() || ""
       const searchFilter = req.nextUrl.searchParams.get("search")?.trim().toLowerCase() || ""
 
@@ -98,7 +91,7 @@ export async function GET(req: NextRequest) {
         )
       }
 
-      return NextResponse.json({ contracts })
+      return NextResponse.json({ success: true, data: contracts, contracts })
     }
 
     // ── Workspace path ────────────────────────────────────────────────────────
@@ -160,7 +153,7 @@ export async function GET(req: NextRequest) {
           return tb - ta
         })
 
-      return NextResponse.json({ contracts })
+      return NextResponse.json({ success: true, data: contracts, contracts })
     }
 
     // ── Legacy clientId path (unchanged) ──────────────────────────────────────
@@ -171,8 +164,8 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    const admin = await isAdmin(decoded.uid)
-    const callerEmail = (decoded.email || "").toLowerCase().trim()
+    const admin = await isAdmin(decoded.uid, decoded.isSystemKey)
+    const callerEmail = ("email" in decoded && typeof decoded.email === "string" ? decoded.email : "").toLowerCase().trim()
 
     if (!admin) {
       const clientSnap = await db.collection("clients").doc(callerEmail).get()
@@ -200,7 +193,7 @@ export async function GET(req: NextRequest) {
       normalizeContract(d.id, d.data() as Record<string, unknown>)
     )
 
-    return NextResponse.json({ contracts })
+    return NextResponse.json({ success: true, data: contracts, contracts })
   } catch (error) {
     console.error("GET /api/contracts error:", error)
     return NextResponse.json(
